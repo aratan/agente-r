@@ -90,8 +90,11 @@ impl Agent {
         let defs = self.tools.defs();
         let mut used_tools = false;
         let mut answer: Option<String> = None;
+        // Desde qué índice un `skill_read` aún no se ha mostrado al modelo.
+        let mut fresh_from = 0usize;
 
         for step in 0..self.opts.max_steps {
+            prune_skill_context(&mut msgs, fresh_from);
             let turn = self.provider.chat(&msgs, &defs)?;
 
             if turn.calls.is_empty() {
@@ -121,6 +124,7 @@ impl Agent {
                 text: turn.text.clone(),
                 calls: turn.calls.clone(),
             });
+            fresh_from = msgs.len();
 
             for call in &turn.calls {
                 let out = match self.tools.run(&call.name, &call.args) {
@@ -280,6 +284,28 @@ impl Agent {
     }
 }
 
+/// Libera del contexto los skills ya usados.
+///
+/// `skill_read` devuelve el contenido completo, y ese contenido se queda en el
+/// historial ocupando ventana y KV cache en todos los pasos siguientes. Se
+/// conserva el último (el modelo aún no lo ha visto) y los anteriores se
+/// sustituyen por un aviso: se releen con `skill_read` si vuelven a hacer falta.
+fn prune_skill_context(msgs: &mut [Msg], keep_from: usize) {
+    for (i, msg) in msgs.iter_mut().enumerate() {
+        if i >= keep_from {
+            break;
+        }
+        if let Msg::Tool { name, content, .. } = msg
+            && name == "skill_read"
+            && !content.starts_with("[liberado]")
+        {
+            *content = "[liberado] skill ya aplicado y descargado del contexto; \
+                        reléelo con skill_read si lo necesitas"
+                .to_string();
+        }
+    }
+}
+
 fn wrap(text: &str, max: usize) -> String {
     memory::truncate(text, max)
 }
@@ -399,6 +425,40 @@ mod tests {
         assert_eq!(answer, "hecho");
         assert_eq!(*veces.lock().unwrap(), 1);
         assert!(!agent.history.is_empty());
+    }
+
+    #[test]
+    fn los_skills_ya_usados_salen_del_contexto() {
+        let mut msgs = vec![
+            Msg::System("sistema".into()),
+            Msg::Tool {
+                id: "1".into(),
+                name: "skill_read".into(),
+                content: "PASOS LARGOS".into(),
+            },
+            Msg::Assistant {
+                text: "ok".into(),
+                calls: Vec::new(),
+            },
+        ];
+        // Recién leído (índice >= keep_from): se conserva hasta que el modelo lo vea.
+        prune_skill_context(&mut msgs, 1);
+        assert!(
+            matches!(&msgs[1], Msg::Tool { content, .. } if content == "PASOS LARGOS")
+        );
+        // Ya visto: se libera del contexto.
+        prune_skill_context(&mut msgs, 3);
+        assert!(
+            matches!(&msgs[1], Msg::Tool { content, .. } if content.starts_with("[liberado]"))
+        );
+        // Las demás herramientas no se tocan.
+        let mut otros = vec![Msg::Tool {
+            id: "2".into(),
+            name: "shell".into(),
+            content: "salida".into(),
+        }];
+        prune_skill_context(&mut otros, 99);
+        assert!(matches!(&otros[0], Msg::Tool { content, .. } if content == "salida"));
     }
 
     #[test]

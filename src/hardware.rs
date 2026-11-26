@@ -63,6 +63,28 @@ impl Specs {
         by_memory.min(by_cores).max(1)
     }
 
+    /// VRAM libre **ahora**; `None` si no hay GPU o no se puede preguntar.
+    ///
+    /// No es la total: el escritorio, el navegador del agente y otros procesos
+    /// ya están usando parte, y esa parte no vuelve por arte de magia.
+    pub fn free_vram_gb(&self) -> Option<f64> {
+        self.gpu.as_ref()?;
+        let output = Command::new("nvidia-smi")
+            .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        text.lines()
+            .next()?
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|mib| mib / 1024.0)
+    }
+
     /// Tamaño máximo razonable de modelo en miles de millones de parámetros (q4).
     pub fn max_params_b(&self) -> f64 {
         (self.budget_gb() / 0.7).clamp(1.0, 120.0)
@@ -84,6 +106,25 @@ impl Specs {
             self.max_params_b()
         )
     }
+}
+
+/// RAM realmente disponible ahora (MemAvailable), no la total: el resto está
+/// en caché, en otros procesos o no se puede reclamar sin paginar.
+pub fn free_ram_gb() -> f64 {
+    let text = fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb = rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<f64>().ok());
+            if let Some(kb) = kb {
+                return kb / 1024.0 / 1024.0;
+            }
+        }
+    }
+    // Sin dato: se asume la mitad de la RAM total.
+    read_ram_gb().unwrap_or(8.0) * 0.5
 }
 
 fn read_ram_gb() -> Option<f64> {

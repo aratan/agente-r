@@ -227,21 +227,34 @@ fn run() -> Result<()> {
     };
 
     // Rellena vectores pendientes (sesiones que guardaron sin embeddings).
+    // Se acumulan y se guardan en un solo paso: un guardado por recuerdo
+    // reescribía el fichero entero N veces.
     if let Some(embedder) = &embedder {
         let pending = memory
             .lock()
             .map(|mem| mem.pending_vectors(64))
             .unwrap_or_default();
+        let mut filled: Vec<(String, Vec<f32>)> = Vec::new();
         for id in pending {
             let text = memory.lock().ok().and_then(|mem| mem.text_of(&id));
             let Some(text) = text else { continue };
             if let Ok(vector) = embedder.embed(&text) {
-                if let Ok(mut mem) = memory.lock() {
-                    let _ = mem.set_vector(&id, vector);
-                }
+                filled.push((id, vector));
             }
         }
+        if !filled.is_empty()
+            && let Ok(mut mem) = memory.lock()
+        {
+            let _ = mem.set_vector_many(filled);
+        }
     }
+
+    // Contexto asumido por inferencia (AGENT_CONTEXT): entra en el cálculo de
+    // slots, porque la KV cache se lleva tanta memoria como los pesos.
+    let context_tokens = std::env::var("AGENT_CONTEXT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(64 * 1024);
 
     let goal = Arc::new(GoalState::new());
     let orchestra = Arc::new(Orchestra::new(
@@ -259,6 +272,7 @@ fn run() -> Result<()> {
             max_agents: cfg.max_agents,
             steps: cfg.max_steps,
             reflect: cfg.reflect,
+            context_tokens,
         },
     ));
 
@@ -342,11 +356,17 @@ fn run() -> Result<()> {
 }
 
 fn build_agent(orchestra: &Arc<Orchestra>, model: &str) -> Agent {
-    let tools = Arc::new(ToolRegistry::for_role(orchestra, 0, Role::Worker));
+    let mandate = orchestra.root_mandate();
+    let tools = Arc::new(ToolRegistry::for_role(
+        orchestra,
+        0,
+        Role::Worker,
+        mandate,
+    ));
     Agent::new(
         orchestra.backend.provider(model),
         tools,
-        orchestra.system_prompt(0, Role::Worker),
+        orchestra.system_prompt(0, Role::Worker, mandate),
         AgentOptions {
             memory: Some(orchestra.memory.clone()),
             embedder: orchestra.embedder.clone(),
@@ -378,9 +398,15 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
     for role in [Role::Planner, Role::Worker, Role::Coder, Role::Fast] {
         out.push_str(&format!("  {} → {}\n", role.as_str(), orchestra.model_for(role)));
     }
+    let modelo_worker = orchestra.model_for(Role::Worker);
     out.push_str(&format!(
-        "Subagentes: hasta {} en paralelo, {} por sesión, profundidad {}\n",
-        orchestra.parallel, orchestra.limits.max_agents, orchestra.limits.max_depth
+        "Subagentes: {} hueco(s) ahora para {modelo_worker} con {}k de contexto \
+         (tope estático {}), {} por sesión, profundidad {}\n",
+        orchestra.slots_for(&modelo_worker),
+        orchestra.limits.context_tokens / 1024,
+        orchestra.parallel,
+        orchestra.limits.max_agents,
+        orchestra.limits.max_depth
     ));
     if let Some(embedder) = &orchestra.embedder {
         out.push_str(&format!("Embeddings: {}\n", embedder.label()));
@@ -434,7 +460,13 @@ fn daemon(orchestra: &Arc<Orchestra>, mut scheduler: Scheduler, once: bool) -> R
                 scheduler::human_interval(task.every_secs)
             );
             let started = Instant::now();
-            let result = orchestra.spawn(1, &task.role, &task.goal, "Tarea programada.");
+            let result = orchestra.spawn(
+                1,
+                &task.role,
+                &task.goal,
+                "Tarea programada.",
+                orchestra.root_mandate(),
+            );
             let body = match result {
                 Ok(text) => format!("OK ({:.1}s)\n{text}\n", started.elapsed().as_secs_f64()),
                 Err(err) => format!("ERROR ({:.1}s)\n{err:#}\n", started.elapsed().as_secs_f64()),

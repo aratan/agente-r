@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::hardware::Specs;
+use crate::hardware::{self, Specs};
 
 /// Tope duro de descargas por proyecto.
 pub const MAX_DOWNLOADS: usize = 3;
@@ -204,6 +204,55 @@ fn score(model: &Model, role: Role, fit: f64) -> f64 {
     score
 }
 
+/// KV cache aproximada por token, en GB.
+///
+/// La fórmula real es `2 (K y V) × capas × cabezas_kv × dim_cabeza × bytes`, pero
+/// el backend no expone la arquitectura del modelo. Se aproxima por tamaño
+/// asumiendo GQA de 8 cabezas KV en fp16: un 8B viene a gastar ~8 GB de KV a 64k
+/// tokens. Es conservador a propósito: pasarse de slots es peor que quedarse
+/// corto, porque el exceso no cabe y el backend empieza a paginar.
+pub fn kv_gb_per_token(params_b: f64) -> f64 {
+    /// KV de un 8B con GQA a 64k tokens ≈ 8 GB.
+    const OCHO_B: f64 = 1.22e-4;
+    OCHO_B * (params_b.max(1.0) / 8.0).sqrt()
+}
+
+/// Cuántas inferencias simultáneas caben **ahora** con este modelo y este
+/// contexto, mirando la memoria libre real del equipo.
+///
+/// Supuestos (son la mayor fuente de error):
+/// - Los pesos del mismo modelo se cargan **una vez** y se comparten entre
+///   peticiones concurrentes; cada slot extra solo añade su KV cache y sus
+///   activaciones. Con un solo modelo cargado, el segundo slot es mucho más
+///   barato que el primero.
+/// - RAM y VRAM se suman como un único presupuesto (llama.cpp reparte capas) y
+///   se deja un 20% de margen para el escritorio y los procesos del agente.
+/// - Un slot siempre se permite: si no cabe, el backend paginará, pero negarse
+///   a trabajar no es una opción.
+pub fn concurrent_slots(model: &Model, specs: &Specs, context_tokens: usize) -> usize {
+    let params = model.params_or_default();
+    let weights_gb = if model.size_gb > 0.0 {
+        model.size_gb
+    } else {
+        // Sin dato del servidor: q4 ≈ 0,6 GB por cada mil millones.
+        params * 0.6
+    };
+    let kv_gb = kv_gb_per_token(params) * context_tokens as f64;
+    let usable = (hardware::free_ram_gb() + specs.free_vram_gb().unwrap_or(0.0)) * 0.8;
+
+    let primer_slot = weights_gb + kv_gb + 0.5;
+    let slots = if usable <= primer_slot {
+        1
+    } else {
+        // Cada slot adicional solo paga KV + activaciones, no los pesos.
+        1 + ((usable - primer_slot) / (kv_gb + 0.3).max(0.1)).floor() as usize
+    };
+
+    // Más de una inferencia por cada dos núcleos no gana nada, y más de 8 es
+    // un enjambre peleando por la misma memoria.
+    slots.min((specs.cores.max(1) / 2).max(1)).clamp(1, 8)
+}
+
 fn get_json(url: &str) -> Option<serde_json::Value> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(5)))
@@ -360,6 +409,36 @@ mod tests {
         let models = vec![model("qwen3.8:27b", 27.3), model("qwen3.5:9b", 9.0)];
         let elegido = pick(&models, Role::Worker, &specs(5.0)).unwrap();
         assert_eq!(elegido, "qwen3.5:9b");
+    }
+
+    #[test]
+    fn mas_contexto_nunca_da_mas_slots() {
+        let m = model("qwen3.5:9b", 9.0);
+        let s = specs(20.0);
+        let corto = concurrent_slots(&m, &s, 4 * 1024);
+        let largo = concurrent_slots(&m, &s, 64 * 1024);
+        assert!(largo <= corto, "más contexto no puede dar más slots");
+        assert!(largo >= 1, "siempre se permite trabajar");
+        assert!(largo <= 8);
+        // 64k de contexto en un 8B no puede ser barato: es el grueso del coste.
+        assert!(
+            kv_gb_per_token(8.0) * 65536.0 > 4.0,
+            "la KV cache a 64k debería pesar varios GB"
+        );
+    }
+
+    #[test]
+    fn el_gpu_grande_admite_mas_que_el_flojo() {
+        let m = model("qwen3.5:9b", 9.0);
+        let mut grande = Specs {
+            cores: 32,
+            ram_gb: 128.0,
+            vram_gb: Some(48.0),
+            gpu: Some("A100".into()),
+        };
+        // Sin nvidia-smi no hay VRAM libre medible: se cae a la RAM disponible.
+        grande.gpu = None;
+        assert!(concurrent_slots(&m, &grande, 8 * 1024) >= 1);
     }
 
     #[test]

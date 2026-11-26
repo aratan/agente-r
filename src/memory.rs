@@ -321,13 +321,28 @@ impl Memory {
             .collect()
     }
 
-    pub fn set_vector(&mut self, id: &str, vector: Vec<f32>) -> Result<()> {
-        if let Some(entry) = self.disk.entries.iter_mut().find(|e| e.id == id) {
-            entry.vector = vector;
+    /// Rellena varios vectores con **un solo guardado** en disco.
+    ///
+    /// Equivale a llamar `set_vector` en bucle, pero serializa y escribe el
+    /// fichero una vez: el coste pasa de O(n · tamaño) a O(tamaño). Los ids que
+    /// no existan se ignoran. Devuelve cuántos se actualizaron.
+    pub fn set_vector_many<I>(&mut self, pairs: I) -> Result<usize>
+    where
+        I: IntoIterator<Item = (String, Vec<f32>)>,
+    {
+        let mut updated = 0usize;
+        for (id, vector) in pairs {
+            if let Some(entry) = self.disk.entries.iter_mut().find(|e| e.id == id) {
+                entry.vector = vector;
+                updated += 1;
+            }
+        }
+        if updated > 0 {
             self.save()?;
         }
-        Ok(())
+        Ok(updated)
     }
+
 
     pub fn text_of(&self, id: &str) -> Option<String> {
         self.disk
@@ -502,6 +517,116 @@ mod tests {
         assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
         assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
         assert_eq!(cosine(&[1.0], &[]), 0.0);
+    }
+
+    #[test]
+    fn vectores_en_lote_guardan_una_vez() {
+        let (mut mem, path) = tmp_memory();
+        for i in 0..3 {
+            mem.remember("fact", &format!("dato número {i}"), vec![], "x", None, vec![])
+                .unwrap();
+        }
+        let ids: Vec<String> = mem.list(None, 10).iter().map(|e| e.id.clone()).collect();
+        let lote: Vec<(String, Vec<f32>)> = ids
+            .iter()
+            .map(|id| (id.clone(), vec![0.5f32, 0.25, 1.0]))
+            .collect();
+
+        let updated = mem.set_vector_many(lote).unwrap();
+        assert_eq!(updated, 3);
+        // Los ids desconocidos no rompen ni se cuentan.
+        assert_eq!(
+            mem.set_vector_many([("no-existe".to_string(), vec![1.0f32])])
+                .unwrap(),
+            0
+        );
+
+        // El resultado sobrevive a reabrir el fichero.
+        let reopened = Memory::open(path, 100).unwrap();
+        for entry in reopened.list(None, 10) {
+            assert_eq!(entry.vector, vec![0.5f32, 0.25, 1.0]);
+        }
+    }
+
+    /// Banco de medida del rellenado de vectores (no es una aserción).
+    ///
+    /// `set_vector` en bucle reescribe el fichero entero por cada recuerdo;
+    /// `set_vector_many` escribe una vez. Ejecutar con:
+    /// `cargo test --release -- --ignored --nocapture banco_rellenado`
+    #[test]
+    #[ignore = "banco de medida: cargo test --release -- --ignored --nocapture"]
+    fn banco_rellenado_de_vectores() {
+        use std::time::Instant;
+
+        const ENTRADAS: usize = 200;
+        const DIM: usize = 256;
+
+        let texto = "La verificación del despliegue exige comprobar el hash del artefacto \
+                     y el estado del servicio antes de abrir la PR; si falla, se revierte."
+            .repeat(2);
+
+        let preparar = || {
+            let dir = std::env::temp_dir().join(format!("agent-bench-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let path = dir.join("memory.json");
+            // Máximo holgado: el recorte por defecto dejaría menos de ENTRADAS.
+            let mut mem = Memory::open(path.clone(), ENTRADAS * 2).unwrap();
+            for i in 0..ENTRADAS {
+                mem.remember(
+                    "lesson",
+                    &format!("{texto} (caso {i})"),
+                    vec![],
+                    "banco",
+                    None,
+                    vec![],
+                )
+                .unwrap();
+            }
+            let ids: Vec<String> = mem.list(None, ENTRADAS).iter().map(|e| e.id.clone()).collect();
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            (mem, path, ids, bytes)
+        };
+
+        let vector = |i: usize| -> Vec<f32> {
+            (0..DIM)
+                .map(|d| ((i * 31 + d * 17) % 1000) as f32 / 1000.0)
+                .collect()
+        };
+
+        // Antes: un guardado por recuerdo (el fichero entero cada vez).
+        let (mut mem, path, ids, bytes) = preparar();
+        let inicio = Instant::now();
+        for (i, id) in ids.iter().enumerate() {
+            mem.set_vector_many([(id.clone(), vector(i))]).unwrap();
+        }
+        let antes = inicio.elapsed();
+        let final_antes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        drop(mem);
+
+        // Después: un único guardado para todo el lote.
+        let (mut mem, _path, ids, _) = preparar();
+        let inicio = Instant::now();
+        let lote: Vec<(String, Vec<f32>)> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.clone(), vector(i)))
+            .collect();
+        let updated = mem.set_vector_many(lote).unwrap();
+        let despues = inicio.elapsed();
+        drop(mem);
+
+        assert_eq!(updated, ENTRADAS);
+        eprintln!(
+            "rellenado de {ENTRADAS} vectores de {DIM} dim · fichero {:.2} MB antes, {:.2} MB después",
+            bytes as f64 / 1e6,
+            final_antes as f64 / 1e6
+        );
+        eprintln!("  set_vector en bucle : {:?}  ({} escrituras del fichero)", antes, ENTRADAS);
+        eprintln!("  set_vector_many     : {:?}  (1 escritura del fichero)", despues);
+        eprintln!(
+            "  factor              : {:.1}×",
+            antes.as_secs_f64() / despues.as_secs_f64().max(1e-9)
+        );
     }
 
     #[test]

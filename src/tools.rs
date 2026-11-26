@@ -21,7 +21,7 @@ use crate::ext::{ToolCreateTool, ToolListTool, ToolRemoveTool};
 use crate::media::{GuiTool, MailTool, MediaTool, TelegramTool, VoiceTool};
 use crate::memory::Memory;
 use crate::models::{Downloads, MAX_DOWNLOADS, Role};
-use crate::orchestra::Orchestra;
+use crate::orchestra::{Mandate, Orchestra};
 use crate::provider::Kind;
 use crate::scheduler::{self, Scheduler};
 use crate::web::{self, Engine, WebState};
@@ -87,7 +87,36 @@ impl Workspace {
                 self.root.display()
             );
         }
-        Ok(normalized)
+
+        // La comprobación anterior es léxica: un symlink dentro del workspace
+        // puede apuntar fuera. Se canonicaliza la parte que ya existe y se
+        // recompone el resto, porque `fs_write` crea ficheros que aún no están.
+        let mut existing = normalized;
+        let mut rest: Vec<std::ffi::OsString> = Vec::new();
+        let mut real = loop {
+            match std::fs::canonicalize(&existing) {
+                Ok(real) => break real,
+                Err(_) => {
+                    let name = existing.file_name().map(|n| n.to_os_string());
+                    let parent = existing.parent().map(|p| p.to_path_buf());
+                    let (Some(name), Some(parent)) = (name, parent) else {
+                        bail!("ruta fuera del workspace: {raw}");
+                    };
+                    rest.push(name);
+                    existing = parent;
+                }
+            }
+        };
+        for part in rest.iter().rev() {
+            real.push(part);
+        }
+        if !real.starts_with(&self.root) {
+            bail!(
+                "ruta fuera del workspace: {raw} (los symlinks la llevan fuera de {})",
+                self.root.display()
+            );
+        }
+        Ok(real)
     }
 
     pub fn rel(&self, path: &Path) -> String {
@@ -156,8 +185,8 @@ impl ToolRegistry {
         Ok(truncate(&out, MAX_OUTPUT))
     }
 
-    /// Juego de herramientas según rol y nivel de anidamiento.
-    pub fn for_role(orch: &Arc<Orchestra>, depth: usize, role: Role) -> Self {
+    /// Juego de herramientas según rol, nivel de anidamiento y mandato.
+    pub fn for_role(orch: &Arc<Orchestra>, depth: usize, role: Role, mandate: Mandate) -> Self {
         let mut reg = Self::empty();
         let ws = orch.workspace.clone();
         let browser = orch.browser.clone();
@@ -243,10 +272,12 @@ impl ToolRegistry {
             reg.add(DelegateTool {
                 orch: orch.clone(),
                 depth,
+                mandate,
             });
             reg.add(DelegateManyTool {
                 orch: orch.clone(),
                 depth,
+                mandate,
             });
         }
         if matches!(role, Role::Planner | Role::Worker) {
@@ -1109,6 +1140,7 @@ fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<String> {
 struct DelegateTool {
     orch: Arc<Orchestra>,
     depth: usize,
+    mandate: Mandate,
 }
 
 impl Tool for DelegateTool {
@@ -1116,7 +1148,7 @@ impl Tool for DelegateTool {
         "delegate"
     }
     fn description(&self) -> &str {
-        "Encarga una subtarea a un subagente (nivel siguiente) con su propio modelo según rol: planner|worker|coder|fast."
+        "Encarga una subtarea a un subagente (nivel siguiente) con su propio modelo según rol: planner|worker|coder|fast. El hijo recibe la mitad de tu presupuesto de agentes y pasos."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -1133,7 +1165,9 @@ impl Tool for DelegateTool {
         let goal = req_str(args, "goal")?;
         let role = str_arg(args, "role").unwrap_or_else(|| "worker".into());
         let context = str_arg(args, "context").unwrap_or_default();
-        let out = self.orch.spawn(self.depth + 1, &role, &goal, &context)?;
+        let out = self
+            .orch
+            .spawn(self.depth + 1, &role, &goal, &context, self.mandate.split())?;
         Ok(format!("[subagente {role} · nivel {}]\n{out}", self.depth + 1))
     }
 }
@@ -1141,6 +1175,7 @@ impl Tool for DelegateTool {
 struct DelegateManyTool {
     orch: Arc<Orchestra>,
     depth: usize,
+    mandate: Mandate,
 }
 
 impl Tool for DelegateManyTool {
@@ -1148,7 +1183,7 @@ impl Tool for DelegateManyTool {
         "delegate_many"
     }
     fn description(&self) -> &str {
-        "Lanza varios subagentes en paralelo (solo tareas independientes). El hardware limita cuántos corren a la vez."
+        "Lanza varios subagentes en paralelo (solo tareas independientes). El hardware limita cuántos corren a la vez y cada hijo recibe su parte del presupuesto de agentes y pasos."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -1198,6 +1233,8 @@ impl Tool for DelegateManyTool {
 
         let orch = self.orch.clone();
         let depth = self.depth;
+        // Hermanos: cada uno la mitad de su parte justa del mandato.
+        let share = self.mandate.share(tasks.len());
         let mut results: Vec<(usize, Result<String>)> = std::thread::scope(|scope| {
             let mut handles = Vec::new();
             for (i, (role, goal, context)) in tasks.into_iter().enumerate() {
@@ -1208,7 +1245,7 @@ impl Tool for DelegateManyTool {
                     i,
                     label_role,
                     label_goal,
-                    scope.spawn(move || orch.spawn(depth + 1, &role, &goal, &context)),
+                    scope.spawn(move || orch.spawn(depth + 1, &role, &goal, &context, share)),
                 ));
             }
             handles
@@ -1483,6 +1520,27 @@ impl Tool for GoalDoneTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_no_deja_escapar_por_symlinks() {
+        let ws = workspace_for_tests("resolve-symlink");
+        let fuera = std::env::temp_dir().join(format!("agent-fuera-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&fuera);
+        std::fs::create_dir_all(&fuera).unwrap();
+        std::fs::write(fuera.join("secreto.txt"), "x").unwrap();
+
+        let enlace = ws.root().join("enlace");
+        let _ = std::fs::remove_file(&enlace);
+        std::os::unix::fs::symlink(&fuera, &enlace).unwrap();
+
+        assert!(
+            ws.resolve("enlace/secreto.txt").is_err(),
+            "el symlink escapó del workspace"
+        );
+        // Un fichero nuevo que aún no existe sigue permitido.
+        assert!(ws.resolve("enlace-nuevo.txt").is_ok());
+        let _ = std::fs::remove_dir_all(&fuera);
+    }
 
     #[test]
     fn resolve_rechaza_escapes() {
