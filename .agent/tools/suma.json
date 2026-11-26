@@ -1,0 +1,15 @@
+{
+  "name": "suma",
+  "description": "Suma dos números opcionales leídos desde stdin como JSON {\"a\":N,\"b\":M}",
+  "parameters": {
+    "properties": {
+      "a": {
+        "type": "integer"
+      },
+      "b": {
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  }
+}

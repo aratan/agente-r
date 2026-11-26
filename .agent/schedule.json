@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    {
+      "id": "a57f6547",
+      "goal": "responde solo OK",
+      "role": "worker",
+      "every_secs": 600,
+      "runs": 1,
+      "last_run": 1794672404,
+      "enabled": true
+    },
+    {
+      "id": "db732e57",
+      "goal": "echo prueba",
+      "role": "worker",
+      "every_secs": 7200,
+      "runs": 0,
+      "last_run": 0,
+      "enabled": true
+    }
+  ]
+}

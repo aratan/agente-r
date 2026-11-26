@@ -1,0 +1,8 @@
+/target
+/.agent-browser
+/.atl
+.agent/memory.json
+.agent/runs/
+*.log
+.env
+.env.*
