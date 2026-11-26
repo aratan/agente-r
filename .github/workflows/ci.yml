@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Edición 2024: hace falta 1.85 o superior; se usa stable, no nightly.
       - uses: dtolnay/rust-toolchain@stable
@@ -17,7 +17,7 @@ jobs:
           components: clippy
 
       - name: Caché de cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
