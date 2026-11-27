@@ -1529,7 +1529,11 @@ impl Tool for GoalPlanTool {
                 let id = req_str(args, "id")?;
                 let title = req_str(args, "title")?;
                 let deps = args.get("depends_on").and_then(Value::as_array)
-                    .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+                    .map(|items| {
+                        items.iter().map(|item| item.as_str().map(str::to_string)
+                            .ok_or_else(|| anyhow!("cada dependencia debe ser un string")))
+                            .collect::<Result<Vec<_>>>()
+                    }).transpose()?.unwrap_or_default()
                     .unwrap_or_default();
                 if args.get("depends_on").is_some_and(|v| !v.is_array()) {
                     bail!("depends_on debe ser un array de strings");
