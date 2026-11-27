@@ -304,7 +304,13 @@ fn run() -> Result<()> {
 
     if cfg.daemon {
         let scheduler = Scheduler::open(scheduler::schedule_path(workspace.root()))?;
-        return daemon(&orchestra, scheduler, cfg.daemon_once);
+        return daemon(
+            &orchestra,
+            scheduler,
+            cfg.daemon_once,
+            cfg.goal.as_deref(),
+            cfg.goal_attempts,
+        );
     }
 
     if let (Some(every), Some(task)) = (&cfg.every, &cfg.task) {
@@ -455,15 +461,54 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
     out
 }
 
-fn daemon(orchestra: &Arc<Orchestra>, mut scheduler: Scheduler, once: bool) -> Result<()> {
+fn daemon(
+    orchestra: &Arc<Orchestra>,
+    mut scheduler: Scheduler,
+    once: bool,
+    initial_goal: Option<&str>,
+    goal_attempts: usize,
+) -> Result<()> {
+    if let Some(goal) = initial_goal {
+        orchestra.goal.start(goal)?;
+    }
+    let worker_model = orchestra.model_for(Role::Worker);
+    let mut goal_agent = if initial_goal.is_some() || orchestra.goal.active().is_some() {
+        Some(build_agent(orchestra, &worker_model))
+    } else {
+        None
+    };
     println!(
-        "daemon · agenda {} · {} tarea(s) · {} subagente(s) en paralelo",
+        "daemon · agenda {} · {} tarea(s) · objetivo persistente: {} · {} subagente(s) en paralelo",
         scheduler.path().display(),
         scheduler.tasks().len(),
+        if goal_agent.is_some() { "activo/reanudable" } else { "sin objetivo activo" },
         orchestra.parallel
     );
     loop {
         let now = scheduler::now();
+
+        // Si hay una misión raíz activa, el worker la continúa en lotes acotados.
+        // Cada lote persiste sus ciclos; al reiniciar el daemon se reanuda desde disco.
+        if let Some(active) = orchestra.goal.active()
+            && active.status == goals::GoalStatus::Active
+        {
+            let agent = goal_agent.get_or_insert_with(|| build_agent(orchestra, &worker_model));
+            let started = Instant::now();
+            let result = agent.pursue(&active.goal, goal_attempts);
+            let body = match result {
+                Ok(text) => format!("OBJETIVO · {:.1}s\\n{text}\\n", started.elapsed().as_secs_f64()),
+                Err(err) => format!("OBJETIVO ERROR · {:.1}s\\n{err:#}\\n", started.elapsed().as_secs_f64()),
+            };
+            let dir = scheduler::runs_dir(orchestra.workspace.root());
+            std::fs::create_dir_all(&dir)?;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("goal.log"))?;
+            writeln!(file, "--- {} ---\\n{body}", scheduler::now())?;
+            println!("{body}");
+        }
+
         for task in scheduler.due(now) {
             println!(
                 "▶ {} · {} · cada {}",
