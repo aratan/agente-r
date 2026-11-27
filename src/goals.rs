@@ -218,10 +218,14 @@ impl GoalState {
         if depends_on.iter().collect::<std::collections::HashSet<_>>().len() != depends_on.len() {
             bail!("dependencias duplicadas");
         }
-        if existing.is_some_and(|i| goal.tasks[i].status == TaskStatus::Completed)
-            && existing.is_some_and(|i| goal.tasks[i].depends_on != depends_on)
-        {
-            bail!("no se pueden cambiar dependencias de una tarea completada");
+        if existing.is_some_and(|i| {
+            let previous = &goal.tasks[i];
+            previous.status == TaskStatus::Completed
+                && (previous.title != title
+                    || previous.depends_on != depends_on
+                    || previous.checks != checks)
+        }) {
+            bail!("no se puede modificar una tarea completada; reábrela primero si no tiene dependientes completados");
         }
         if goal.tasks.iter().any(|task| {
             task.status == TaskStatus::Completed
@@ -541,6 +545,8 @@ mod tests {
         goal.upsert_task("test", "tests", &[], &["cargo test".into()]).unwrap();
         goal.set_task_status("test", TaskStatus::Completed, Some("tests ejecutados")).unwrap();
         goal.set_task_verification("test", true, "cargo test: ok").unwrap();
+        assert!(goal.upsert_task("test", "tests", &[], &["cargo check".into()]).is_err());
+        goal.set_task_status("test", TaskStatus::Pending, None).unwrap();
         goal.upsert_task("test", "tests", &[], &["cargo check".into()]).unwrap();
         assert!(!goal.tasks()[0].verified);
     }
