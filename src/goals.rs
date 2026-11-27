@@ -167,15 +167,17 @@ impl GoalState {
         let Ok(mut disk) = self.inner.lock() else {
             return "No se pudo registrar el estado de la meta".to_string();
         };
-        let Some(record) = disk.active.as_mut() else {
-            return "Rechazado: no hay un objetivo activo".to_string();
-        };
-        if record.status == GoalStatus::Completed {
-            return format!("El objetivo {} ya estaba completado.", record.id);
+        {
+            let Some(record) = disk.active.as_mut() else {
+                return "Rechazado: no hay un objetivo activo".to_string();
+            };
+            if record.status == GoalStatus::Completed {
+                return format!("El objetivo {} ya estaba completado.", record.id);
+            }
+            record.evidence = Some(evidence.to_string());
+            record.status = GoalStatus::Completed;
+            record.updated_at = now();
         }
-        record.evidence = Some(evidence.to_string());
-        record.status = GoalStatus::Completed;
-        record.updated_at = now();
         match self.save(&disk) {
             Ok(()) => format!("Meta marcada como cumplida con evidencia: {evidence}"),
             Err(err) => {
