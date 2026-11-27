@@ -24,6 +24,26 @@ pub struct AttemptRecord {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalTask {
+    pub id: String,
+    pub title: String,
+    pub status: TaskStatus,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub evidence: Option<String>,
+    pub updated_at: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoalRecord {
     pub id: String,
@@ -37,6 +57,8 @@ pub struct GoalRecord {
     pub attempt_count: u64,
     #[serde(default)]
     pub evidence: Option<String>,
+    #[serde(default)]
+    pub tasks: Vec<GoalTask>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -117,6 +139,7 @@ impl GoalState {
             attempts: Vec::new(),
             attempt_count: 0,
             evidence: None,
+            tasks: Vec::new(),
         });
         self.save(&disk)?;
         Ok(())
@@ -142,6 +165,85 @@ impl GoalState {
         record.updated_at = now();
         self.save(&disk)?;
         Ok(number)
+    }
+
+    /// Crea o actualiza una tarea del plan persistente. Las dependencias deben
+    /// existir y el grafo debe permanecer acíclico.
+    pub fn upsert_task(&self, id: &str, title: &str, depends_on: &[String]) -> Result<()> {
+        let id = id.trim();
+        let title = title.trim();
+        if id.is_empty() || title.is_empty() { bail!("id y title de tarea son obligatorios"); }
+        if depends_on.iter().any(|dep| dep == id) { bail!("una tarea no puede depender de sí misma"); }
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        for dep in depends_on {
+            if !goal.tasks.iter().any(|task| task.id == *dep) {
+                bail!("dependencia desconocida: {dep}");
+            }
+        }
+        let existing = goal.tasks.iter().position(|task| task.id == id);
+        let status = existing.map(|i| goal.tasks[i].status.clone()).unwrap_or(TaskStatus::Pending);
+        let evidence = existing.and_then(|i| goal.tasks[i].evidence.clone());
+        let task = GoalTask {
+            id: id.to_string(),
+            title: title.to_string(),
+            status,
+            depends_on: depends_on.to_vec(),
+            evidence,
+            updated_at: now(),
+        };
+        if let Some(index) = existing { goal.tasks[index] = task; } else { goal.tasks.push(task); }
+        if has_dependency_cycle(&goal.tasks) { bail!("dependencias circulares: operación rechazada"); }
+        goal.updated_at = now();
+        self.save(&disk)?;
+        Ok(())
+    }
+
+    /// Cambia estado de tarea. Una tarea solo puede empezar si sus dependencias
+    /// están completadas; completar requiere evidencia no vacía.
+    pub fn set_task_status(&self, id: &str, status: TaskStatus, evidence: Option<&str>) -> Result<()> {
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let index = goal.tasks.iter().position(|task| task.id == id)
+            .ok_or_else(|| anyhow::anyhow!("no existe la tarea {id}"))?;
+        if status != TaskStatus::Pending {
+            for dep in &goal.tasks[index].depends_on {
+                let ready = goal.tasks.iter().any(|task| task.id == *dep && task.status == TaskStatus::Completed);
+                if !ready { bail!("dependencia pendiente: {dep}"); }
+            }
+        }
+        if status == TaskStatus::Completed && evidence.map(str::trim).unwrap_or("").is_empty() {
+            bail!("evidence es obligatoria para completar una tarea");
+        }
+        let task = &mut goal.tasks[index];
+        task.status = status;
+        task.evidence = evidence.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        task.updated_at = now();
+        goal.updated_at = now();
+        self.save(&disk)?;
+        Ok(())
+    }
+
+    pub fn tasks(&self) -> Vec<GoalTask> {
+        self.inner.lock().ok()
+            .and_then(|disk| disk.active.as_ref().map(|goal| goal.tasks.clone()))
+            .unwrap_or_default()
+    }
+
+    pub fn plan_prompt(&self) -> String {
+        let tasks = self.tasks();
+        if tasks.is_empty() {
+            return "PLAN: todavía no hay tareas persistentes. Descompón el objetivo en entregables verificables con goal_task antes de ejecutar cambios grandes.\\n".to_string();
+        }
+        let mut out = String::from("PLAN PERSISTENTE (respeta dependencias; trabaja primero en tareas listas):\\n");
+        for task in tasks {
+            out.push_str(&format!("- [{}] {} — {}{}\\n",
+                match task.status { TaskStatus::Pending => "pendiente", TaskStatus::InProgress => "en curso", TaskStatus::Completed => "completada" },
+                task.id, task.title,
+                if task.depends_on.is_empty() { String::new() } else { format!(" (depende de: {})", task.depends_on.join(", ")) }
+            ));
+        }
+        out
     }
 
     pub fn attempts(&self) -> u64 {
@@ -208,6 +310,25 @@ pub fn state_path(root: &Path) -> PathBuf {
     root.join(".agent").join("goal.json")
 }
 
+fn has_dependency_cycle(tasks: &[GoalTask]) -> bool {
+    fn visit(id: &str, tasks: &[GoalTask], visiting: &mut Vec<String>, visited: &mut Vec<String>) -> bool {
+        if visiting.iter().any(|item| item == id) { return true; }
+        if visited.iter().any(|item| item == id) { return false; }
+        visiting.push(id.to_string());
+        if let Some(task) = tasks.iter().find(|task| task.id == id) {
+            for dep in &task.depends_on {
+                if visit(dep, tasks, visiting, visited) { return true; }
+            }
+        }
+        visiting.pop();
+        visited.push(id.to_string());
+        false
+    }
+    let mut visiting = Vec::new();
+    let mut visited = Vec::new();
+    tasks.iter().any(|task| visit(&task.id, tasks, &mut visiting, &mut visited))
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -257,6 +378,30 @@ pub fn attempt_prompt(goal: &str, attempt: usize, max: usize, previous: &[String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plan_persistente_valida_dependencias_y_evidencias() {
+        let goal = GoalState::new();
+        goal.start("objetivo con plan").unwrap();
+        goal.upsert_task("a", "preparar base", &[]).unwrap();
+        goal.upsert_task("b", "validar base", &["a".into()]).unwrap();
+        assert!(goal.set_task_status("b", TaskStatus::InProgress, None).is_err());
+        goal.set_task_status("a", TaskStatus::Completed, Some("tests verdes")).unwrap();
+        goal.set_task_status("b", TaskStatus::InProgress, None).unwrap();
+        assert!(goal.set_task_status("b", TaskStatus::Completed, None).is_err());
+        goal.set_task_status("b", TaskStatus::Completed, Some("auditoría pasada")).unwrap();
+        assert_eq!(goal.tasks().len(), 2);
+    }
+
+    #[test]
+    fn plan_rechaza_ciclos_y_dependencias_inexistentes() {
+        let goal = GoalState::new();
+        goal.start("objetivo con grafo").unwrap();
+        goal.upsert_task("a", "A", &[]).unwrap();
+        assert!(goal.upsert_task("b", "B", &["missing".into()]).is_err());
+        goal.upsert_task("b", "B", &["a".into()]).unwrap();
+        assert!(goal.upsert_task("a", "A", &["b".into()]).is_err());
+    }
 
     #[test]
     fn requiere_evidencia_y_persistencia() {
