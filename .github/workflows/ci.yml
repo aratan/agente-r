@@ -20,6 +20,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Formatting
+        run: cargo fmt --check
+
       - name: Tests
         run: cargo test --locked
 
