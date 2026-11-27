@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum GoalStatus {
     Active,
+    Paused,
     Completed,
 }
 
@@ -65,6 +66,8 @@ pub struct GoalRecord {
     pub id: String,
     pub goal: String,
     pub status: GoalStatus,
+    #[serde(default)]
+    pub pause_reason: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
     #[serde(default)]
@@ -133,9 +136,18 @@ impl GoalState {
         if goal.is_empty() { bail!("el objetivo no puede estar vacío"); }
         let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
         match &disk.active {
-            Some(current) if current.goal == goal => return Ok(()),
-            Some(current) if current.status == GoalStatus::Active => {
-                bail!("ya existe un objetivo activo ({}): {}; complétalo antes de iniciar otro", current.id, current.goal)
+            Some(current) if current.goal == goal && current.status == GoalStatus::Active => return Ok(()),
+            Some(current) if current.goal == goal && current.status == GoalStatus::Paused => {
+                let record = disk.active.as_mut().expect("objetivo presente");
+                record.status = GoalStatus::Active;
+                record.pause_reason = None;
+                record.updated_at = now();
+                self.save(&disk)?;
+                return Ok(());
+            }
+            Some(current) if current.goal == goal && current.status == GoalStatus::Completed => return Ok(()),
+            Some(current) if current.status == GoalStatus::Active || current.status == GoalStatus::Paused => {
+                bail!("hay un objetivo activo o pausado ({}): {}; reanúdalo o complétalo antes de iniciar otro", current.id, current.goal)
             }
             Some(_) => {
                 if let Some(completed) = disk.active.take() {
@@ -152,6 +164,7 @@ impl GoalState {
             id: goal_id(goal, now),
             goal: goal.to_string(),
             status: GoalStatus::Active,
+            pause_reason: None,
             created_at: now,
             updated_at: now,
             attempts: Vec::new(),
@@ -168,7 +181,7 @@ impl GoalState {
     pub fn record_attempt(&self, summary: &str) -> Result<u64> {
         let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
         let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        if record.status == GoalStatus::Completed { bail!("el objetivo ya está completado"); }
+        if record.status != GoalStatus::Active { bail!("el objetivo no está activo"); }
         record.attempt_count += 1;
         let number = record.attempt_count;
         record.attempts.push(AttemptRecord {
@@ -387,6 +400,27 @@ impl GoalState {
         out
     }
 
+    pub fn pause(&self, reason: &str) -> Result<()> {
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        if record.status != GoalStatus::Active { bail!("solo se puede pausar un objetivo activo"); }
+        record.status = GoalStatus::Paused;
+        record.pause_reason = Some(truncate(reason.trim(), 800));
+        record.updated_at = now();
+        self.save(&disk)
+    }
+
+    /// Detecta respuestas idénticas consecutivas, señal determinista de estancamiento.
+    pub fn repeated_attempts(&self, limit: usize) -> bool {
+        if limit < 2 { return false; }
+        self.inner.lock().ok().and_then(|disk| disk.active.as_ref().map(|goal| {
+            if goal.attempts.len() < limit { return false; }
+            let tail = &goal.attempts[goal.attempts.len() - limit..];
+            let first = tail[0].summary.trim();
+            !first.is_empty() && tail.iter().all(|attempt| attempt.summary.trim() == first)
+        })).unwrap_or(false)
+    }
+
     pub fn attempts(&self) -> u64 {
         self.inner.lock().ok()
             .and_then(|d| d.active.as_ref().map(|g| g.attempt_count))
@@ -526,6 +560,20 @@ pub fn attempt_prompt(goal: &str, attempt: usize, max: usize, previous: &[String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pausa_por_estancamiento_y_reanudacion_explicita() {
+        let goal = GoalState::new();
+        goal.start("misión persistente").unwrap();
+        for _ in 0..3 { goal.record_attempt("sin cambios; no se pudo avanzar").unwrap(); }
+        assert!(goal.repeated_attempts(3));
+        goal.pause("tres ciclos idénticos").unwrap();
+        assert_eq!(goal.active().unwrap().status, GoalStatus::Paused);
+        assert!(goal.start("otra misión").is_err());
+        goal.start("misión persistente").unwrap();
+        assert_eq!(goal.active().unwrap().status, GoalStatus::Active);
+        assert!(goal.active().unwrap().pause_reason.is_none());
+    }
 
     #[test]
     fn diario_causal_bloquea_repeticion_sin_cambio_de_condiciones() {
