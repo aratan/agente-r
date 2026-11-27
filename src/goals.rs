@@ -1584,7 +1584,8 @@ mod tests {
             }
 
             goal.finish_operation(&id, true, "ok").unwrap();
-            goal.record_attempt(&format!("ciclo {index} correcto")).unwrap();
+            goal.record_attempt(&format!("ciclo {index} correcto"))
+                .unwrap();
         }
 
         let recovered = GoalState::open(path.clone()).unwrap();
@@ -1596,11 +1597,18 @@ mod tests {
         assert!(record.operations.len() <= 1_000);
         assert_eq!(record.operation_sequence, 1_200);
         assert_eq!(
-            record.operations.iter().filter(|op| op.status == OperationStatus::Unknown).count(),
+            record
+                .operations
+                .iter()
+                .filter(|op| op.status == OperationStatus::Unknown)
+                .count(),
             12
         );
         let bytes = std::fs::metadata(&path).unwrap().len();
-        assert!(bytes < 2 * 1024 * 1024, "goal.json creció demasiado: {bytes} bytes");
+        assert!(
+            bytes < 2 * 1024 * 1024,
+            "goal.json creció demasiado: {bytes} bytes"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
