@@ -100,6 +100,10 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
   completar una tarea antes que sus dependencias. El objetivo global no se puede cerrar mientras
   quede alguna tarea pendiente o en curso.
 - Cada ciclo recibe el plan persistente para retomar la siguiente tarea tras una interrupción.
+- El diario causal conserva hasta 200 fallos con fingerprint, categoría, síntoma y estrategia
+  probada. `goal_failure` bloquea repetir el mismo fingerprint+estrategia salvo que el agente
+  declare y describa un cambio de condiciones; los últimos fallos se inyectan en los ciclos
+  siguientes para reducir bucles de ensayo idéntico.
 - **Límite pendiente:** `goal_done` todavía acepta evidencia textual; no hay aún un evaluador
   independiente que compruebe por sí mismo los criterios de aceptación.
 
