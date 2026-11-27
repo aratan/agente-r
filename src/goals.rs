@@ -184,6 +184,11 @@ impl GoalState {
         let existing = goal.tasks.iter().position(|task| task.id == id);
         let status = existing.map(|i| goal.tasks[i].status.clone()).unwrap_or(TaskStatus::Pending);
         let evidence = existing.and_then(|i| goal.tasks[i].evidence.clone());
+        if status == TaskStatus::Completed
+            && existing.is_some_and(|i| goal.tasks[i].depends_on != depends_on)
+        {
+            bail!("no se pueden cambiar dependencias de una tarea completada");
+        }
         let task = GoalTask {
             id: id.to_string(),
             title: title.to_string(),
@@ -192,8 +197,10 @@ impl GoalState {
             evidence,
             updated_at: now(),
         };
-        if let Some(index) = existing { goal.tasks[index] = task; } else { goal.tasks.push(task); }
-        if has_dependency_cycle(&goal.tasks) { bail!("dependencias circulares: operación rechazada"); }
+        let mut proposed = goal.tasks.clone();
+        if let Some(index) = existing { proposed[index] = task; } else { proposed.push(task); }
+        if has_dependency_cycle(&proposed) { bail!("dependencias circulares: operación rechazada"); }
+        goal.tasks = proposed;
         goal.updated_at = now();
         self.save(&disk)?;
         Ok(())
@@ -233,11 +240,11 @@ impl GoalState {
     pub fn plan_prompt(&self) -> String {
         let tasks = self.tasks();
         if tasks.is_empty() {
-            return "PLAN: todavía no hay tareas persistentes. Descompón el objetivo en entregables verificables con goal_task antes de ejecutar cambios grandes.\\n".to_string();
+            return "PLAN: todavía no hay tareas persistentes. Descompón el objetivo en entregables verificables con goal_task antes de ejecutar cambios grandes.\n".to_string();
         }
-        let mut out = String::from("PLAN PERSISTENTE (respeta dependencias; trabaja primero en tareas listas):\\n");
+        let mut out = String::from("PLAN PERSISTENTE (respeta dependencias; trabaja primero en tareas listas):\n");
         for task in tasks {
-            out.push_str(&format!("- [{}] {} — {}{}\\n",
+            out.push_str(&format!("- [{}] {} — {}{}\n",
                 match task.status { TaskStatus::Pending => "pendiente", TaskStatus::InProgress => "en curso", TaskStatus::Completed => "completada" },
                 task.id, task.title,
                 if task.depends_on.is_empty() { String::new() } else { format!(" (depende de: {})", task.depends_on.join(", ")) }
@@ -275,6 +282,13 @@ impl GoalState {
             };
             if record.status == GoalStatus::Completed {
                 return format!("El objetivo {} ya estaba completado.", record.id);
+            }
+            let unfinished = record.tasks.iter()
+                .filter(|task| task.status != TaskStatus::Completed)
+                .map(|task| task.id.clone())
+                .collect::<Vec<_>>();
+            if !unfinished.is_empty() {
+                return format!("Rechazado: quedan tareas sin completar: {}", unfinished.join(", "));
             }
             record.evidence = Some(evidence.to_string());
             record.status = GoalStatus::Completed;
