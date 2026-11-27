@@ -572,6 +572,7 @@ mod tests {
         assert!(goal.repeated_attempts(3));
         goal.pause("tres ciclos idénticos").unwrap();
         assert_eq!(goal.active().unwrap().status, GoalStatus::Paused);
+        assert!(goal.record_attempt("otro ciclo").is_err());
         assert!(goal.start("otra misión").is_err());
         goal.start("misión persistente").unwrap();
         assert_eq!(goal.active().unwrap().status, GoalStatus::Active);
