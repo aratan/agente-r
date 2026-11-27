@@ -411,8 +411,12 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
         let in_progress = goal.tasks.iter().filter(|task| task.status == goals::TaskStatus::InProgress).count();
         let completed = goal.tasks.iter().filter(|task| task.status == goals::TaskStatus::Completed).count();
         let verified = goal.tasks.iter().filter(|task| task.verified).count();
+        let unknown_ops = goal.operations.iter().filter(|op| op.status == goals::OperationStatus::Unknown).count();
+        let started_ops = goal.operations.iter().filter(|op| op.status == goals::OperationStatus::Started).count();
         out.push_str(&format!("  Plan: {} tareas · {} pendientes · {} en curso · {} completadas · {} verificadas\\n",
             goal.tasks.len(), pending, in_progress, completed, verified));
+        out.push_str(&format!("  Journal: {} operaciones · {} resultado desconocido · {} en ejecución\\n",
+            goal.operations.len(), unknown_ops, started_ops));
     }
     out.push_str(&format!(
         "Backend: {} · {}\n",
