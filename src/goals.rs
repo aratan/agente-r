@@ -988,6 +988,7 @@ mod tests {
         drop(goal);
 
         let recovered = GoalState::open(path.clone()).unwrap();
+        assert_eq!(recovered.recover_interrupted().unwrap(), 2);
         let record = recovered.active().unwrap();
         assert_eq!(record.operations[0].status, OperationStatus::Unknown);
         assert!(!record.operations[0].result_summary.as_deref().unwrap().contains("private@example.test"));
