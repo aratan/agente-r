@@ -179,8 +179,8 @@ impl Agent {
     /// silenciosamente una meta que siga activa.
     pub fn pursue(&mut self, goal: &str, max_attempts: usize) -> Result<String> {
         let max = max_attempts.max(1);
-        let state = self.opts.goal.as_ref();
-        if let Some(state) = state {
+        let state = self.opts.goal.clone();
+        if let Some(state) = &state {
             state.start(goal)?;
             if state.is_done() {
                 return Ok(format!(
@@ -192,8 +192,8 @@ impl Agent {
 
         let mut last = String::new();
         for cycle in 1..=max {
-            let previous = state.map(|g| g.previous_summaries(8)).unwrap_or_default();
-            let attempt = state.map(|g| g.attempts() as usize + 1).unwrap_or(cycle);
+            let previous = state.as_ref().map(|g| g.previous_summaries(8)).unwrap_or_default();
+            let attempt = state.as_ref().map(|g| g.attempts() as usize + 1).unwrap_or(cycle);
             eprintln!(
                 "\n── objetivo · ciclo {attempt} · presupuesto local {cycle}/{max} · {}",
                 memory::truncate(goal, 80)
@@ -201,15 +201,15 @@ impl Agent {
             let prompt = goals::attempt_prompt(goal, attempt, max, &previous);
             last = self.run(&prompt)?;
 
-            if state.map(|g| g.is_done()).unwrap_or(false) {
+            if state.as_ref().map(|g| g.is_done()).unwrap_or(false) {
                 eprintln!(
                     "✓ objetivo completado · evidencia: {}",
-                    state.and_then(|g| g.evidence()).unwrap_or_default()
+                    state.as_ref().and_then(|g| g.evidence()).unwrap_or_default()
                 );
                 return Ok(last);
             }
 
-            if let Some(state) = state {
+            if let Some(state) = &state {
                 state.record_attempt(&last)?;
             }
         }
