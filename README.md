@@ -94,6 +94,12 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
   es acumulativo. Se archivan hasta 100 objetivos completados.
 - Solo el agente raíz puede cerrar el objetivo global mediante `goal_done`. Los subagentes
   devuelven resultados al agente raíz.
+- El agente raíz dispone de `goal_task` para crear/actualizar tareas, declarar dependencias,
+  iniciar tareas, completarlas con evidencia y consultar el plan. El grafo persistente se guarda
+  dentro de `.agent/goal.json`; rechaza dependencias inexistentes/cíclicas y no permite
+  completar una tarea antes que sus dependencias. El objetivo global no se puede cerrar mientras
+  quede alguna tarea pendiente o en curso.
+- Cada ciclo recibe el plan persistente para retomar la siguiente tarea tras una interrupción.
 - **Límite pendiente:** `goal_done` todavía acepta evidencia textual; no hay aún un evaluador
   independiente que compruebe por sí mismo los criterios de aceptación.
 
