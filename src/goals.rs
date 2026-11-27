@@ -45,6 +45,16 @@ pub struct GoalTask {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailureRecord {
+    pub fingerprint: String,
+    pub category: String,
+    pub symptom: String,
+    pub strategy: String,
+    pub condition_changed: bool,
+    pub at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoalRecord {
     pub id: String,
     pub goal: String,
@@ -59,6 +69,8 @@ pub struct GoalRecord {
     pub evidence: Option<String>,
     #[serde(default)]
     pub tasks: Vec<GoalTask>,
+    #[serde(default)]
+    pub failures: Vec<FailureRecord>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -140,6 +152,7 @@ impl GoalState {
             attempt_count: 0,
             evidence: None,
             tasks: Vec::new(),
+            failures: Vec::new(),
         });
         self.save(&disk)?;
         Ok(())
@@ -246,6 +259,62 @@ impl GoalState {
         goal.updated_at = now();
         self.save(&disk)?;
         Ok(())
+    }
+
+    /// Registra un fallo y la estrategia intentada. La misma estrategia para
+    /// el mismo síntoma exige declarar un cambio real de condiciones antes de
+    /// volver a intentarla.
+    pub fn record_failure(
+        &self,
+        fingerprint: &str,
+        category: &str,
+        symptom: &str,
+        strategy: &str,
+        condition_changed: bool,
+    ) -> Result<()> {
+        let fingerprint = fingerprint.trim();
+        let strategy = strategy.trim();
+        if fingerprint.is_empty() || strategy.is_empty() {
+            bail!("fingerprint y strategy son obligatorios");
+        }
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let repeated = goal.failures.iter().any(|failure| {
+            failure.fingerprint == fingerprint && failure.strategy == strategy
+        });
+        if repeated && !condition_changed {
+            bail!("reintento bloqueado: esta estrategia ya falló para el mismo síntoma; cambia la estrategia o documenta un cambio de condiciones");
+        }
+        goal.failures.push(FailureRecord {
+            fingerprint: truncate(fingerprint, 160),
+            category: truncate(category.trim(), 80),
+            symptom: truncate(symptom.trim(), 800),
+            strategy: truncate(strategy, 300),
+            condition_changed,
+            at: now(),
+        });
+        if goal.failures.len() > 200 {
+            goal.failures.drain(..goal.failures.len() - 200);
+        }
+        goal.updated_at = now();
+        self.save(&disk)?;
+        Ok(())
+    }
+
+    pub fn failure_prompt(&self, limit: usize) -> String {
+        let failures = self.inner.lock().ok()
+            .and_then(|disk| disk.active.as_ref().map(|goal| {
+                goal.failures.iter().rev().take(limit).cloned().collect::<Vec<_>>()
+            })).unwrap_or_default();
+        if failures.is_empty() { return String::new(); }
+        let mut out = String::from("DIARIO DE FALLOS (no repitas la misma estrategia sin cambiar condiciones):\\n");
+        for failure in failures.iter().rev() {
+            out.push_str(&format!("- [{}] {} | síntoma: {} | estrategia fallida: {} | cambio de condiciones declarado: {}\\n",
+                failure.category, failure.fingerprint, failure.symptom, failure.strategy,
+                if failure.condition_changed { "sí" } else { "no" }
+            ));
+        }
+        out
     }
 
     pub fn tasks(&self) -> Vec<GoalTask> {
@@ -409,6 +478,17 @@ pub fn attempt_prompt(goal: &str, attempt: usize, max: usize, previous: &[String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diario_causal_bloquea_repeticion_sin_cambio_de_condiciones() {
+        let goal = GoalState::new();
+        goal.start("corregir fallo recurrente").unwrap();
+        goal.record_failure("cargo-test-17", "test", "assertion failed", "cambiar el timeout", false).unwrap();
+        assert!(goal.record_failure("cargo-test-17", "test", "assertion failed", "cambiar el timeout", false).is_err());
+        assert!(goal.record_failure("cargo-test-17", "test", "assertion failed", "aislar la carrera", false).is_ok());
+        assert!(goal.record_failure("cargo-test-17", "test", "assertion failed", "cambiar el timeout", true).is_ok());
+        assert!(goal.failure_prompt(8).contains("aislar la carrera"));
+    }
 
     #[test]
     fn plan_persistente_valida_dependencias_y_evidencias() {
