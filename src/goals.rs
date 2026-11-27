@@ -120,6 +120,8 @@ pub struct GoalRecord {
     #[serde(default)]
     pub operations: Vec<OperationRecord>,
     #[serde(default)]
+    pub operation_sequence: u64,
+    #[serde(default)]
     pub active_cycle: Option<u64>,
 }
 
@@ -312,6 +314,7 @@ impl GoalState {
             failures: Vec::new(),
             cycles: Vec::new(),
             operations: Vec::new(),
+            operation_sequence: 0,
             active_cycle: None,
         });
         self.save(&disk)?;
@@ -401,13 +404,27 @@ impl GoalState {
                 "operación bloqueada: existe una ejecución anterior con el mismo fingerprint y resultado desconocido; reconcilia el efecto externo antes de intentar repetirla"
             );
         }
-        let sequence = record
-            .operations
-            .iter()
-            .filter(|op| op.cycle == cycle)
-            .count()
-            + 1;
-        let id = format!("cycle-{cycle}-op-{sequence}");
+        // Nunca descartar operaciones ambiguas o aplicadas: hacerlo permitiría
+        // repetir un efecto externo antiguo al superar el límite del journal.
+        if record.operations.len() >= 1_000 {
+            if let Some(index) = record.operations.iter().position(|operation| {
+                matches!(
+                    operation.status,
+                    OperationStatus::Succeeded
+                        | OperationStatus::Failed
+                        | OperationStatus::ResolvedNotApplied
+                )
+            }) {
+                record.operations.remove(index);
+            } else {
+                bail!("journal lleno: reconcilia operaciones desconocidas antes de ejecutar más herramientas");
+            }
+        }
+        record.operation_sequence = record
+            .operation_sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("se agotó el contador de operaciones"))?;
+        let id = format!("op-{}", record.operation_sequence);
         record.operations.push(OperationRecord {
             id: id.clone(),
             cycle,
@@ -418,9 +435,6 @@ impl GoalState {
             finished_at: None,
             result_summary: None,
         });
-        if record.operations.len() > 1000 {
-            record.operations.drain(..record.operations.len() - 1000);
-        }
         record.updated_at = now();
         self.save(&disk)?;
         Ok(Some(id))
@@ -1541,6 +1555,55 @@ mod tests {
                 .is_err()
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn journal_lleno_conserva_unknown_y_no_reutiliza_ids() {
+        let goal = GoalState::new();
+        goal.start("journal bajo carga").unwrap();
+        goal.begin_cycle().unwrap();
+
+        let mut ids = std::collections::HashSet::new();
+        for index in 0..999 {
+            let id = goal
+                .begin_operation("write", &serde_json::json!({"index": index}))
+                .unwrap()
+                .unwrap();
+            assert!(ids.insert(id.clone()), "ID duplicado: {id}");
+            goal.finish_operation(&id, true, "ok").unwrap();
+        }
+
+        let unknown_args = serde_json::json!({"payment": "ambiguous"});
+        let unknown = goal
+            .begin_operation("payment", &unknown_args)
+            .unwrap()
+            .unwrap();
+        assert!(ids.insert(unknown.clone()));
+
+        // Al superar el límite solo se expulsa un registro terminal.
+        let next = goal
+            .begin_operation("write", &serde_json::json!({"index": 1000}))
+            .unwrap()
+            .unwrap();
+        assert!(ids.insert(next.clone()));
+        let record = goal.active().unwrap();
+        assert_eq!(record.operations.len(), 1_000);
+        assert!(record.operations.iter().any(|op| {
+            op.id == unknown && op.status == OperationStatus::Started
+        }));
+
+        // El límite ya está ocupado por estados no descartables: falla cerrado.
+        let second_unknown = goal
+            .begin_operation("payment", &serde_json::json!({"payment": "second"}))
+            .unwrap();
+        assert!(second_unknown.is_err());
+
+        // El mismo efecto ambiguo sigue bloqueado incluso tras la poda.
+        goal.finish_operation(&next, true, "ok").unwrap();
+        goal.finish_operation(&unknown, false, "fallo simulado").unwrap();
+        let recovered = goal.active().unwrap();
+        let all_ids: Vec<_> = recovered.operations.iter().map(|op| op.id.clone()).collect();
+        assert_eq!(all_ids.iter().collect::<std::collections::HashSet<_>>().len(), all_ids.len());
     }
 
     #[test]
