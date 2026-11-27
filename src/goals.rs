@@ -1592,15 +1592,35 @@ mod tests {
             op.id == unknown && op.status == OperationStatus::Started
         }));
 
-        // El límite ya está ocupado por estados no descartables: falla cerrado.
-        let second_unknown = goal
-            .begin_operation("payment", &serde_json::json!({"payment": "second"}))
-            .unwrap();
-        assert!(second_unknown.is_err());
+        // Llenamos el resto con operaciones aún abiertas. La poda solo puede
+        // retirar resultados terminales; al no quedar ninguno, debe fallar cerrado.
+        for index in 0..998 {
+            let id = goal
+                .begin_operation("external", &serde_json::json!({"index": index}))
+                .unwrap()
+                .unwrap();
+            assert!(ids.insert(id), "ID duplicado al reciclar el journal");
+        }
+        assert!(goal
+            .begin_operation("external", &serde_json::json!({"index": 9999}))
+            .is_err());
 
-        // El mismo efecto ambiguo sigue bloqueado incluso tras la poda.
-        goal.finish_operation(&next, true, "ok").unwrap();
-        goal.finish_operation(&unknown, false, "fallo simulado").unwrap();
+        let record = goal.active().unwrap();
+        assert_eq!(record.operations.len(), 1_000);
+        assert!(record.operations.iter().any(|op| op.id == unknown));
+        assert!(record.operations.iter().all(|op| op.status == OperationStatus::Started));
+        assert_eq!(
+            ids.len(),
+            record.operations.len() + 1, // el primer terminal se podó
+        );
+
+        goal.recover_interrupted().unwrap();
+        assert!(goal
+            .begin_cycle()
+            .is_ok());
+        assert!(goal
+            .begin_operation("payment", &unknown_args)
+            .is_err());
         let recovered = goal.active().unwrap();
         let all_ids: Vec<_> = recovered.operations.iter().map(|op| op.id.clone()).collect();
         assert_eq!(all_ids.iter().collect::<std::collections::HashSet<_>>().len(), all_ids.len());
