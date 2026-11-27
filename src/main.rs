@@ -352,6 +352,7 @@ fn run() -> Result<()> {
         return voice_loop(&mut agent);
     }
     if let Some(goal_text) = &cfg.goal {
+        let _goal_lock = DaemonLock::acquire(workspace.root())?;
         let answer = agent.pursue(goal_text, cfg.goal_attempts)?;
         println!("\n{answer}");
         return Ok(());
@@ -631,8 +632,11 @@ fn repl(
             continue;
         }
         if let Some(goal) = line.strip_prefix("/goal ") {
-            match agent.pursue(goal.trim(), goal_attempts) {
-                Ok(answer) => println!("\n{answer}\n"),
+            match DaemonLock::acquire(orchestra.workspace.root()) {
+                Ok(_goal_lock) => match agent.pursue(goal.trim(), goal_attempts) {
+                    Ok(answer) => println!("\\n{answer}\\n"),
+                    Err(err) => eprintln!("error: {err:#}"),
+                },
                 Err(err) => eprintln!("error: {err:#}"),
             }
             continue;
