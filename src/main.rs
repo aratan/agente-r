@@ -634,7 +634,7 @@ fn repl(
         if let Some(goal) = line.strip_prefix("/goal ") {
             match DaemonLock::acquire(orchestra.workspace.root()) {
                 Ok(_goal_lock) => match agent.pursue(goal.trim(), goal_attempts) {
-                    Ok(answer) => println!("\\n{answer}\\n"),
+                    Ok(answer) => println!("\n{answer}\n"),
                     Err(err) => eprintln!("error: {err:#}"),
                 },
                 Err(err) => eprintln!("error: {err:#}"),
