@@ -218,6 +218,7 @@ impl ToolRegistry {
         if depth == 0 {
             reg.add(GoalPlanTool { goal: orch.goal.clone() });
             reg.add(GoalFailureTool { goal: orch.goal.clone() });
+            reg.add(GoalVerifyTool { goal: orch.goal.clone(), ws: ws.clone() });
             reg.add(GoalDoneTool {
                 goal: orch.goal.clone(),
             });
@@ -1517,6 +1518,7 @@ impl Tool for GoalPlanTool {
                 "id": {"type": "string"},
                 "title": {"type": "string"},
                 "depends_on": {"type": "array", "items": {"type": "string"}},
+                "checks": {"type": "array", "items": {"type": "string"}, "description": "Comandos exactos de aceptación de la lista permitida; obligatorios para verificar la tarea."},
                 "evidence": {"type": "string"}
             },
             "required": ["action"]
@@ -1529,18 +1531,24 @@ impl Tool for GoalPlanTool {
             "add" | "update" => {
                 let id = req_str(args, "id")?;
                 let title = req_str(args, "title")?;
+                let current = self.goal.tasks().into_iter().find(|task| task.id == id);
                 let deps = if let Some(value) = args.get("depends_on") {
                     let items = value.as_array().ok_or_else(|| anyhow!("depends_on debe ser un array de strings"))?;
                     items.iter().map(|item| item.as_str().map(str::to_string)
                         .ok_or_else(|| anyhow!("cada dependencia debe ser un string")))
                         .collect::<Result<Vec<_>>>()?
                 } else {
-                    self.goal.tasks().into_iter()
-                        .find(|task| task.id == id)
-                        .map(|task| task.depends_on)
-                        .unwrap_or_default()
+                    current.as_ref().map(|task| task.depends_on.clone()).unwrap_or_default()
                 };
-                self.goal.upsert_task(&id, &title, &deps)?;
+                let checks = if let Some(value) = args.get("checks") {
+                    let items = value.as_array().ok_or_else(|| anyhow!("checks debe ser un array de strings"))?;
+                    items.iter().map(|item| item.as_str().map(str::to_string)
+                        .ok_or_else(|| anyhow!("cada check debe ser un string")))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    current.map(|task| task.checks).unwrap_or_default()
+                };
+                self.goal.upsert_task(&id, &title, &deps, &checks)?;
                 Ok(format!("Tarea {id} guardada en el plan persistente."))
             }
             "start" => {
@@ -1604,6 +1612,93 @@ impl Tool for GoalFailureTool {
             .ok_or_else(|| anyhow!("condition_changed debe ser boolean"))?;
         self.goal.record_failure(&fingerprint, &category, &symptom, &strategy, condition_changed)?;
         Ok(format!("Fallo registrado: {fingerprint}. La estrategia queda en el diario persistente."))
+    }
+}
+
+struct GoalVerifyTool {
+    goal: Arc<crate::goals::GoalState>,
+    ws: Workspace,
+}
+
+impl Tool for GoalVerifyTool {
+    fn name(&self) -> &str { "goal_verify" }
+    fn description(&self) -> &str {
+        "Evaluador determinista separado del agente ejecutor. Ejecuta los checks de aceptación predefinidos de cada tarea completada; solo marca verified si todos los comandos permitidos terminan con exit 0. No acepta evidencias textuales como sustituto de ejecutar checks."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {"id": {"type": "string", "description": "ID de tarea; si se omite, evalúa todas las tareas completadas"}},
+        })
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let tasks = self.goal.tasks();
+        if tasks.is_empty() { bail!("no hay tareas que evaluar"); }
+        let selected = if let Some(id) = str_arg(args, "id") {
+            tasks.into_iter().filter(|task| task.id == id).collect::<Vec<_>>()
+        } else {
+            tasks.into_iter().filter(|task| task.status == crate::goals::TaskStatus::Completed).collect::<Vec<_>>()
+        };
+        if selected.is_empty() { bail!("no hay tareas completadas que evaluar"); }
+        let mut report = String::new();
+        let mut failures = 0usize;
+        for task in selected {
+            if task.status != crate::goals::TaskStatus::Completed {
+                self.goal.set_task_verification(&task.id, false, "la tarea no está completada")?;
+                failures += 1;
+                report.push_str(&format!("- {}: FAIL; tarea no completada\n", task.id));
+                continue;
+            }
+            if task.checks.is_empty() {
+                self.goal.set_task_verification(&task.id, false, "la tarea no define checks ejecutables")?;
+                failures += 1;
+                report.push_str(&format!("- {}: FAIL; faltan checks de aceptación\n", task.id));
+                continue;
+            }
+            let mut output = String::new();
+            let mut passed = true;
+            for check in &task.checks {
+                let Some(command) = verification_command(check) else {
+                    passed = false;
+                    output.push_str(&format!("check no permitido: {check}\n"));
+                    break;
+                };
+                let result = run_command(command, self.ws.root(), Duration::from_secs(600))?;
+                let failed = result.contains("[exit ") || result.contains("[timeout");
+                output.push_str(&format!("$ {command}\n{result}\n"));
+                if failed { passed = false; break; }
+            }
+            self.goal.set_task_verification(&task.id, passed, &output)?;
+            if passed {
+                report.push_str(&format!("- {}: PASS; checks ejecutados y exit 0\n", task.id));
+            } else {
+                failures += 1;
+                report.push_str(&format!("- {}: FAIL; revisar salida y corregir antes de reintentar\n", task.id));
+            }
+        }
+        if failures > 0 {
+            report.push_str(&format!("Evaluación no superada: {failures} tarea(s) fallaron."));
+        } else {
+            report.push_str("Evaluación superada: todos los checks ejecutados terminaron correctamente.");
+        }
+        Ok(report)
+    }
+}
+
+fn verification_command(check: &str) -> Option<&'static str> {
+    match check.trim() {
+        "cargo test" => Some("cargo test --locked"),
+        "cargo clippy" => Some("cargo clippy --locked --all-targets -- -D warnings"),
+        "cargo check" => Some("cargo check --locked"),
+        "cargo fmt --check" => Some("cargo fmt --all -- --check"),
+        "git diff --check" => Some("git diff --check"),
+        "npm test" => Some("npm test"),
+        "npm run test" => Some("npm run test"),
+        "pytest" => Some("pytest"),
+        "python -m pytest" => Some("python -m pytest"),
+        "go test" => Some("go test ./..."),
+        "make test" => Some("make test"),
+        _ => None,
     }
 }
 
