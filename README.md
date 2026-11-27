@@ -80,10 +80,21 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
 - **Máximo 3 descargas de modelos por proyecto**, con registro persistente en
   `.agent/models.json` y validación antes de descargar (`--pull`, `model_pull`).
 
-### Metas que insiste (`/goal`, `--goal`)
-- Hasta `--goal-attempts` intentos (8). Cada intento recibe los resúmenes anteriores y la
-  orden de **cambiar de estrategia**; el último pide explicar qué falta.
-- Solo se cierra con `goal_done` y **evidencia obligatoria**; sin evidencia se rechaza.
+### Objetivo persistente y ejecución prolongada (`/goal`, `--goal`, `--daemon`)
+- El objetivo raíz y el historial de ciclos se guardan en `.agent/goal.json`; repetir el
+  mismo `--goal` reanuda el estado, no lo reinicia. Un objetivo activo impide sustituirlo
+  silenciosamente por otro.
+- `--goal-attempts` define el tamaño de cada lote de trabajo, no el límite total de la misión.
+- `--goal "objetivo" --daemon` inicia y persigue el objetivo en lotes sucesivos; el daemon
+  también reanuda un objetivo activo al reiniciarse. Los resultados se anexan a
+  `.agent/runs/goal.log`.
+- `--daemon-once` ejecuta un lote y sale; `--daemon` mantiene el proceso vivo.
+- Los resúmenes de los últimos 500 ciclos se conservan para continuidad; el contador total
+  es acumulativo. Se archivan hasta 100 objetivos completados.
+- Solo el agente raíz puede cerrar el objetivo global mediante `goal_done`. Los subagentes
+  devuelven resultados al agente raíz.
+- **Límite pendiente:** `goal_done` todavía acepta evidencia textual; no hay aún un evaluador
+  independiente que compruebe por sí mismo los criterios de aceptación.
 
 ### Agenda de tareas
 - `schedule_add` / `schedule_list` / `schedule_remove` y `--every 30m --task "..."`.
