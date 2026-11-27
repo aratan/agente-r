@@ -89,6 +89,14 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
   también reanuda un objetivo activo al reiniciarse. Los resultados se anexan a
   `.agent/runs/goal.log`.
 - `--daemon-once` ejecuta un lote y sale; `--daemon` mantiene el proceso vivo.
+- Supervisor de usuario systemd disponible en `contrib/systemd/local-agent-goal.service`.
+  Ajusta la ruta del binario y workspace; después instala con:
+  `mkdir -p ~/.config/systemd/user && cp contrib/systemd/local-agent-goal.service ~/.config/systemd/user/`
+  `systemctl --user daemon-reload && systemctl --user enable --now local-agent-goal.service`.
+  Para mantenerlo activo tras cerrar sesión y arrancarlo al iniciar el equipo:
+  `loginctl enable-linger "$USER"` (puede requerir autorización del sistema).
+  Consulta el estado con `systemctl --user status local-agent-goal.service` y logs con
+  `journalctl --user -u local-agent-goal.service -f`.
 - El daemon adquiere un bloqueo exclusivo del workspace (`.agent/daemon.lock`) mediante `flock`; una segunda instancia falla sin tocar el objetivo. El kernel libera el bloqueo al morir el proceso, por lo que no quedan locks obsoletos tras un crash.
 - Los resúmenes de los últimos 500 ciclos se conservan para continuidad; el contador total
   es acumulativo. Se archivan hasta 100 objetivos completados.
