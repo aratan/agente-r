@@ -213,9 +213,13 @@ impl ToolRegistry {
             state: web_state.clone(),
             ws: ws.clone(),
         });
-        reg.add(GoalDoneTool {
-            goal: orch.goal.clone(),
-        });
+        // Solo el agente raíz puede cerrar el objetivo global. Un subagente
+        // entrega evidencias a su padre, pero no puede finalizar la misión.
+        if depth == 0 {
+            reg.add(GoalDoneTool {
+                goal: orch.goal.clone(),
+            });
+        }
         reg.add(MediaTool);
         reg.add(TelegramTool);
         reg.add(VoiceTool);
