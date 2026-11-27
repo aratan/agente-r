@@ -473,7 +473,11 @@ fn daemon(
         orchestra.goal.start(goal)?;
     }
     let worker_model = orchestra.model_for(Role::Worker);
-    let mut goal_agent = if initial_goal.is_some() || orchestra.goal.active().is_some() {
+    let has_active_goal = initial_goal.is_some() || orchestra.goal.active().is_some();
+    if has_active_goal && worker_model.is_empty() {
+        bail!("no hay un modelo de chat instalado en {}; no se inicia el worker persistente", orchestra.backend.label());
+    }
+    let mut goal_agent = if has_active_goal {
         Some(build_agent(orchestra, &worker_model))
     } else {
         None
