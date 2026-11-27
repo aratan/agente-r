@@ -184,10 +184,19 @@ impl GoalState {
         let existing = goal.tasks.iter().position(|task| task.id == id);
         let status = existing.map(|i| goal.tasks[i].status.clone()).unwrap_or(TaskStatus::Pending);
         let evidence = existing.and_then(|i| goal.tasks[i].evidence.clone());
-        if status == TaskStatus::Completed
+        if depends_on.iter().collect::<std::collections::HashSet<_>>().len() != depends_on.len() {
+            bail!("dependencias duplicadas");
+        }
+        if existing.is_some_and(|i| goal.tasks[i].status == TaskStatus::Completed)
             && existing.is_some_and(|i| goal.tasks[i].depends_on != depends_on)
         {
             bail!("no se pueden cambiar dependencias de una tarea completada");
+        }
+        if goal.tasks.iter().any(|task| {
+            task.status == TaskStatus::Completed
+                && task.depends_on.iter().any(|dep| dep == id)
+        }) && existing.is_some_and(|i| goal.tasks[i].depends_on != depends_on) {
+            bail!("no se pueden cambiar dependencias de una tarea con dependientes completados");
         }
         let task = GoalTask {
             id: id.to_string(),
@@ -213,6 +222,14 @@ impl GoalState {
         let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
         let index = goal.tasks.iter().position(|task| task.id == id)
             .ok_or_else(|| anyhow::anyhow!("no existe la tarea {id}"))?;
+        if status != TaskStatus::Completed
+            && goal.tasks.iter().any(|task| {
+                task.status == TaskStatus::Completed
+                    && task.depends_on.iter().any(|dep| dep == id)
+            })
+        {
+            bail!("no se puede reabrir una tarea con dependientes ya completados");
+        }
         if status != TaskStatus::Pending {
             for dep in &goal.tasks[index].depends_on {
                 let ready = goal.tasks.iter().any(|task| task.id == *dep && task.status == TaskStatus::Completed);
@@ -439,6 +456,18 @@ mod tests {
         assert!(final_state.is_done());
         assert_eq!(final_state.evidence().as_deref(), Some("cargo test: 38/38; CI verde"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_permite_reabrir_dependencia_de_tarea_completada() {
+        let goal = GoalState::new();
+        goal.start("dependencias estables").unwrap();
+        goal.upsert_task("a", "base", &[]).unwrap();
+        goal.upsert_task("b", "integración", &["a".into()]).unwrap();
+        goal.set_task_status("a", TaskStatus::Completed, Some("base verificada")).unwrap();
+        goal.set_task_status("b", TaskStatus::Completed, Some("integración verificada")).unwrap();
+        assert!(goal.set_task_status("a", TaskStatus::Pending, None).is_err());
+        assert!(goal.upsert_task("a", "base", &["b".into()]).is_err());
     }
 
     #[test]
