@@ -154,37 +154,6 @@ impl GoalState {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Disk::default(),
             Err(err) => return Err(err).with_context(|| format!("no se pudo leer {}", path.display())),
         };
-        let mut disk = disk;
-        if let Some(record) = disk.active.as_mut() {
-            let mut changed = false;
-            for operation in &mut record.operations {
-                if operation.status == OperationStatus::Started {
-                    operation.status = OperationStatus::Unknown;
-                    operation.finished_at = Some(now());
-                    operation.result_summary = Some("proceso interrumpido; resultado externo desconocido; no repetir automáticamente".into());
-                    changed = true;
-                }
-            }
-            if let Some(cycle_number) = record.active_cycle.take() {
-                if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number) {
-                    cycle.interrupted = true;
-                    cycle.finished_at = Some(now());
-                }
-                changed = true;
-            }
-            if changed {
-                record.updated_at = now();
-                let path_ref = &path;
-                let parent = path_ref.parent().unwrap_or_else(|| Path::new("."));
-                std::fs::create_dir_all(parent)?;
-                let tmp = path_ref.with_extension("json.tmp");
-                let bytes = serde_json::to_vec_pretty(&disk)?;
-                std::fs::write(&tmp, bytes)?;
-                std::fs::File::open(&tmp)?.sync_all()?;
-                std::fs::rename(&tmp, path_ref)?;
-                std::fs::File::open(parent)?.sync_all()?;
-            }
-        }
         Ok(Self { path: Some(path), inner: Mutex::new(disk) })
     }
 
@@ -199,6 +168,34 @@ impl GoalState {
             .with_context(|| format!("no se pudo persistir el objetivo en {}", path.display()))?;
         std::fs::File::open(parent)?.sync_all()?;
         Ok(())
+    }
+
+    /// Recupera ciclos interrumpidos. Debe llamarse solo después de adquirir
+    /// el bloqueo exclusivo del workspace para evitar escrituras concurrentes.
+    pub fn recover_interrupted(&self) -> Result<usize> {
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let Some(record) = disk.active.as_mut() else { return Ok(0) };
+        let mut recovered = 0usize;
+        for operation in &mut record.operations {
+            if operation.status == OperationStatus::Started {
+                operation.status = OperationStatus::Unknown;
+                operation.finished_at = Some(now());
+                operation.result_summary = Some("proceso interrumpido; resultado externo desconocido; no repetir automáticamente".into());
+                recovered += 1;
+            }
+        }
+        if let Some(cycle_number) = record.active_cycle.take() {
+            if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number) {
+                cycle.interrupted = true;
+                cycle.finished_at = Some(now());
+            }
+            recovered += 1;
+        }
+        if recovered > 0 {
+            record.updated_at = now();
+            self.save(&disk)?;
+        }
+        Ok(recovered)
     }
 
     /// Fija el objetivo único. Reanuda el mismo objetivo; rechaza reemplazar
