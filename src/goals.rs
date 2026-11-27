@@ -202,14 +202,6 @@ impl GoalState {
         self.inner.lock().ok().and_then(|d| d.active.clone())
     }
 
-    /// Solo para compatibilidad con pruebas/uso efímero. No se usa al reanudar
-    /// objetivos desde CLI, porque borrar el estado perdería continuidad.
-    pub fn reset(&self) {
-        if let Ok(mut disk) = self.inner.lock() {
-            disk.active = None;
-            let _ = self.save(&disk);
-        }
-    }
 }
 
 pub fn state_path(root: &Path) -> PathBuf {
