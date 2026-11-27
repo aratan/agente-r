@@ -1770,6 +1770,14 @@ mod tests {
     }
 
     #[test]
+    fn evaluador_rechaza_comandos_fuera_de_la_lista_permitida() {
+        assert_eq!(verification_command("cargo test"), Some("cargo test --locked"));
+        assert_eq!(verification_command("cargo clippy"), Some("cargo clippy --locked --all-targets -- -D warnings"));
+        assert_eq!(verification_command("rm -rf /"), None);
+        assert_eq!(verification_command("cargo test; touch /tmp/pwned"), None);
+    }
+
+    #[test]
     fn parametros_de_herramientas_son_json_schema() {
         let reg = ToolRegistry::empty();
         assert!(reg.defs().is_empty());
