@@ -199,7 +199,15 @@ impl Agent {
                 memory::truncate(goal, 80)
             );
             let prompt = goals::attempt_prompt(goal, attempt, max, &previous);
-            last = self.run(&prompt)?;
+            last = match self.run(&prompt) {
+                Ok(answer) => answer,
+                Err(err) => {
+                    if let Some(state) = &state {
+                        state.record_attempt(&format!("ERROR de ejecución: {err:#}"))?;
+                    }
+                    return Err(err);
+                }
+            };
 
             if state.as_ref().map(|g| g.is_done()).unwrap_or(false) {
                 eprintln!(
