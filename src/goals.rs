@@ -442,6 +442,18 @@ mod tests {
     }
 
     #[test]
+    fn no_permite_cerrar_objetivo_con_tareas_pendientes() {
+        let goal = GoalState::new();
+        goal.start("objetivo dividido en tareas").unwrap();
+        goal.upsert_task("compile", "compilar", &[]).unwrap();
+        assert!(goal.ack("el agente afirma que terminó").starts_with("Rechazado"));
+        assert!(!goal.is_done());
+        goal.set_task_status("compile", TaskStatus::Completed, Some("cargo test: ok")).unwrap();
+        assert!(goal.ack("tests ejecutados y resultado comprobado").contains("cumplida"));
+        assert!(goal.is_done());
+    }
+
+    #[test]
     fn reanuda_mismo_objetivo_y_cambia_al_completar() {
         let goal = GoalState::new();
         goal.start("objetivo A").unwrap();
