@@ -1820,7 +1820,7 @@ mod tests {
         assert!(prompt.contains("resultado global"));
     }
 
-    /// Ensayo prolongado manual. No se ejecuta en CI: por defecto dura 48 horas.
+    /// Ensayo prolongado manual. Por defecto dura 48 horas.
     /// Ejecutar con bash scripts/goal-soak.sh; solo usa operaciones sintéticas locales.
     #[test]
     #[ignore = "soak prolongado manual; ejecutar con scripts/goal-soak.sh"]
@@ -1897,11 +1897,12 @@ mod tests {
 
             let metadata = std::fs::metadata(&path).unwrap();
             peak_file_bytes = peak_file_bytes.max(metadata.len());
-            if let Ok(status) = std::fs::read_to_string("/proc/self/status")
-                && let Some(rss) = status.lines().find(|line| line.starts_with("VmRSS:"))
-                && let Some(kib) = rss.split_whitespace().nth(1).and_then(|v| v.parse().ok())
-            {
-                peak_rss_kib = peak_rss_kib.max(kib);
+            if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+                if let Some(rss) = status.lines().find(|line| line.starts_with("VmRSS:")) {
+                    if let Some(kib) = rss.split_whitespace().nth(1).and_then(|value| value.parse().ok()) {
+                        peak_rss_kib = peak_rss_kib.max(kib);
+                    }
+                }
             }
 
             if started.elapsed() >= next_report {
@@ -1932,4 +1933,5 @@ mod tests {
             path.display()
         );
     }
+
 }
