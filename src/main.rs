@@ -406,7 +406,7 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
         ));
         out.push_str(&format!("  {}\n", memory::truncate(&goal.goal, 180)));
         if let Some(reason) = &goal.pause_reason {
-            out.push_str(&format!("  Motivo de pausa: {}\\n", memory::truncate(reason, 160)));
+            out.push_str(&format!("  Motivo de pausa: {}\n", memory::truncate(reason, 160)));
         }
         let pending = goal.tasks.iter().filter(|task| task.status == goals::TaskStatus::Pending).count();
         let in_progress = goal.tasks.iter().filter(|task| task.status == goals::TaskStatus::InProgress).count();
@@ -414,9 +414,9 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
         let verified = goal.tasks.iter().filter(|task| task.verified).count();
         let unknown_ops = goal.operations.iter().filter(|op| op.status == goals::OperationStatus::Unknown).count();
         let started_ops = goal.operations.iter().filter(|op| op.status == goals::OperationStatus::Started).count();
-        out.push_str(&format!("  Plan: {} tareas · {} pendientes · {} en curso · {} completadas · {} verificadas\\n",
+        out.push_str(&format!("  Plan: {} tareas · {} pendientes · {} en curso · {} completadas · {} verificadas\n",
             goal.tasks.len(), pending, in_progress, completed, verified));
-        out.push_str(&format!("  Journal: {} operaciones · {} resultado desconocido · {} en ejecución\\n",
+        out.push_str(&format!("  Journal: {} operaciones · {} resultado desconocido · {} en ejecución\n",
             goal.operations.len(), unknown_ops, started_ops));
     }
     out.push_str(&format!(
@@ -655,7 +655,7 @@ fn repl(
                         continue;
                     }
                     match agent.pursue(goal.trim(), goal_attempts) {
-                        Ok(answer) => println!("\\n{answer}\\n"),
+                        Ok(answer) => println!("\n{answer}\n"),
                         Err(err) => eprintln!("error: {err:#}"),
                     }
                 }
