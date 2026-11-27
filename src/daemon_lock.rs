@@ -27,6 +27,29 @@ impl DaemonLock {
     }
 }
 
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        unlock_file(&self._file);
+    }
+}
+
+#[cfg(unix)]
+fn unlock_file(file: &File) {
+    use std::os::fd::AsRawFd;
+
+    const LOCK_UN: i32 = 8;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+
+    // Liberación explícita y determinista; el cierre del descriptor sigue
+    // siendo la salvaguarda del kernel ante terminación abrupta.
+    let _ = unsafe { flock(file.as_raw_fd(), LOCK_UN) };
+}
+
+#[cfg(not(unix))]
+fn unlock_file(_file: &File) {}
+
 #[cfg(unix)]
 fn lock_file(file: &File) -> Result<()> {
     use std::os::fd::AsRawFd;
@@ -67,7 +90,7 @@ mod tests {
         let first = DaemonLock::acquire(&root).unwrap();
         assert!(DaemonLock::acquire(&root).is_err());
         drop(first);
-        assert!(DaemonLock::acquire(&root).is_ok());
+        DaemonLock::acquire(&root).unwrap_or_else(|err| panic!("el bloqueo no se liberó: {err:#}"));
         let _ = std::fs::remove_dir_all(root);
     }
 }
