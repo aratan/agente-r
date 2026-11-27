@@ -190,9 +190,8 @@ impl GoalState {
 
     fn save(&self, disk: &Disk) -> Result<()> {
         let Some(path) = &self.path else { return Ok(()) };
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec_pretty(disk)?)?;
         std::fs::File::open(&tmp)?.sync_all()?;
