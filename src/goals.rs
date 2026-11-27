@@ -314,7 +314,7 @@ impl GoalState {
                 failure.category, failure.fingerprint, failure.symptom, failure.strategy,
                 if failure.condition_changed { "sí" } else { "no" }
             ));
-            out.push('\\n');
+            out.push('\n');
         }
         out
     }
