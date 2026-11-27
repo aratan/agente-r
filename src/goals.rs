@@ -417,7 +417,9 @@ impl GoalState {
             }) {
                 record.operations.remove(index);
             } else {
-                bail!("journal lleno: reconcilia operaciones desconocidas antes de ejecutar más herramientas");
+                bail!(
+                    "journal lleno: reconcilia operaciones desconocidas antes de ejecutar más herramientas"
+                );
             }
         }
         record.operation_sequence = record
@@ -1588,9 +1590,12 @@ mod tests {
         assert!(ids.insert(next.clone()));
         let record = goal.active().unwrap();
         assert_eq!(record.operations.len(), 1_000);
-        assert!(record.operations.iter().any(|op| {
-            op.id == unknown && op.status == OperationStatus::Started
-        }));
+        assert!(
+            record
+                .operations
+                .iter()
+                .any(|op| { op.id == unknown && op.status == OperationStatus::Started })
+        );
 
         // Llenamos el resto con operaciones aún abiertas. La poda solo puede
         // retirar resultados terminales; al no quedar ninguno, debe fallar cerrado.
@@ -1601,29 +1606,41 @@ mod tests {
                 .unwrap();
             assert!(ids.insert(id), "ID duplicado al reciclar el journal");
         }
-        assert!(goal
-            .begin_operation("external", &serde_json::json!({"index": 9999}))
-            .is_err());
+        assert!(
+            goal.begin_operation("external", &serde_json::json!({"index": 9999}))
+                .is_err()
+        );
 
         let record = goal.active().unwrap();
         assert_eq!(record.operations.len(), 1_000);
         assert!(record.operations.iter().any(|op| op.id == unknown));
-        assert!(record.operations.iter().all(|op| op.status == OperationStatus::Started));
+        assert!(
+            record
+                .operations
+                .iter()
+                .all(|op| op.status == OperationStatus::Started)
+        );
         assert_eq!(record.operation_sequence, 1_999);
         let retained_ids: std::collections::HashSet<_> =
             record.operations.iter().map(|op| op.id.as_str()).collect();
         assert_eq!(retained_ids.len(), record.operations.len());
 
         goal.recover_interrupted().unwrap();
-        assert!(goal
-            .begin_cycle()
-            .is_ok());
-        assert!(goal
-            .begin_operation("payment", &unknown_args)
-            .is_err());
+        assert!(goal.begin_cycle().is_ok());
+        assert!(goal.begin_operation("payment", &unknown_args).is_err());
         let recovered = goal.active().unwrap();
-        let all_ids: Vec<_> = recovered.operations.iter().map(|op| op.id.clone()).collect();
-        assert_eq!(all_ids.iter().collect::<std::collections::HashSet<_>>().len(), all_ids.len());
+        let all_ids: Vec<_> = recovered
+            .operations
+            .iter()
+            .map(|op| op.id.clone())
+            .collect();
+        assert_eq!(
+            all_ids
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            all_ids.len()
+        );
     }
 
     #[test]
