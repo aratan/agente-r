@@ -202,6 +202,7 @@ impl Agent {
             if let Some(state) = &state {
                 prompt.push('\n');
                 prompt.push_str(&state.plan_prompt());
+                prompt.push_str(&state.failure_prompt(8));
             }
             last = match self.run(&prompt) {
                 Ok(answer) => answer,
