@@ -382,6 +382,18 @@ fn build_agent(orchestra: &Arc<Orchestra>, model: &str) -> Agent {
 fn info_block(orchestra: &Arc<Orchestra>) -> String {
     let mut out = String::new();
     out.push_str(&format!("Hardware: {}\n", orchestra.specs.summary()));
+    if let Some(goal) = orchestra.goal.active() {
+        out.push_str(&format!(
+            "Objetivo: {} · {} · {} ciclos registrados\n",
+            goal.id,
+            match goal.status {
+                goals::GoalStatus::Active => "activo",
+                goals::GoalStatus::Completed => "completado",
+            },
+            goal.attempt_count
+        ));
+        out.push_str(&format!("  {}\n", memory::truncate(&goal.goal, 180)));
+    }
     out.push_str(&format!(
         "Backend: {} · {}\n",
         orchestra.backend.label(),
