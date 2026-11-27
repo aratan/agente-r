@@ -970,6 +970,13 @@ mod tests {
 
         let second_cycle = recovered.begin_cycle().unwrap();
         assert!(second_cycle > first_cycle, "los ciclos no deben reutilizar IDs tras un crash");
+        assert!(
+            recovered.begin_operation("send_email", &serde_json::json!({
+                "to": "private@example.test",
+                "body": "contenido sensible"
+            })).is_err(),
+            "un efecto externo de resultado desconocido no debe repetirse con los mismos argumentos"
+        );
         let next = recovered.begin_operation("send_email", &serde_json::json!({"to":"other"})).unwrap().unwrap();
         assert_ne!(next, operation);
         let _ = std::fs::remove_dir_all(dir);
