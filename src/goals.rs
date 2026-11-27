@@ -599,7 +599,7 @@ mod tests {
         goal.set_task_status("b", TaskStatus::Completed, Some("integración verificada")).unwrap();
         goal.set_task_verification("b", true, "cargo clippy: ok").unwrap();
         assert!(goal.set_task_status("a", TaskStatus::Pending, None).is_err());
-        assert!(goal.upsert_task("a", "base", &["b".into()]).is_err());
+        assert!(goal.upsert_task("a", "base", &["b".into()], &[]).is_err());
     }
 
     #[test]
