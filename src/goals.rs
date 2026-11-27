@@ -270,7 +270,7 @@ impl GoalState {
                 operation.result_summary = Some("ciclo anterior sin cierre; resultado desconocido".into());
             }
         }
-        let number = record.attempt_count.saturating_add(1);
+        let number = record.cycles.iter().map(|cycle| cycle.number).max().unwrap_or(0).saturating_add(1);
         record.cycles.push(CycleRecord { number, started_at: now(), finished_at: None, interrupted: false });
         if record.cycles.len() > 200 {
             record.cycles.drain(..record.cycles.len() - 200);
@@ -631,6 +631,11 @@ impl GoalState {
             }
             record.evidence = Some(evidence.to_string());
             record.status = GoalStatus::Completed;
+            if let Some(cycle_number) = record.active_cycle.take() {
+                if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number) {
+                    cycle.finished_at = Some(now());
+                }
+            }
             record.updated_at = now();
         }
         match self.save(&disk) {
