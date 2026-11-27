@@ -1560,6 +1560,51 @@ mod tests {
     }
 
     #[test]
+    fn persistencia_soporta_1200_reaperturas_con_historial_acotado() {
+        let dir = std::env::temp_dir().join(format!("agent-goal-soak-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("goal.json");
+
+        for index in 0..1_200u64 {
+            let goal = GoalState::open(path.clone()).unwrap();
+            goal.recover_interrupted().unwrap();
+            goal.start("soak persistente").unwrap();
+            goal.begin_cycle().unwrap();
+            let id = goal
+                .begin_operation("external", &serde_json::json!({"sequence": index}))
+                .unwrap()
+                .unwrap();
+
+            // Cada 100 ciclos simulamos una caída tras registrar la intención,
+            // antes de guardar el resultado de la operación.
+            if index % 100 == 0 {
+                drop(goal);
+                continue;
+            }
+
+            goal.finish_operation(&id, true, "ok").unwrap();
+            goal.record_attempt(&format!("ciclo {index} correcto")).unwrap();
+        }
+
+        let recovered = GoalState::open(path.clone()).unwrap();
+        recovered.recover_interrupted().unwrap();
+        let record = recovered.active().unwrap();
+        assert_eq!(record.attempt_count, 1_188);
+        assert!(record.attempts.len() <= 500);
+        assert!(record.cycles.len() <= 200);
+        assert!(record.operations.len() <= 1_000);
+        assert_eq!(record.operation_sequence, 1_200);
+        assert_eq!(
+            record.operations.iter().filter(|op| op.status == OperationStatus::Unknown).count(),
+            12
+        );
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        assert!(bytes < 2 * 1024 * 1024, "goal.json creció demasiado: {bytes} bytes");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn journal_lleno_conserva_unknown_y_no_reutiliza_ids() {
         let goal = GoalState::new();
         goal.start("journal bajo carga").unwrap();
