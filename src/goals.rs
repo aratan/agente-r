@@ -41,6 +41,12 @@ pub struct GoalTask {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub evidence: Option<String>,
+    #[serde(default)]
+    pub checks: Vec<String>,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub verification_output: Option<String>,
     pub updated_at: u64,
 }
 
@@ -182,7 +188,7 @@ impl GoalState {
 
     /// Crea o actualiza una tarea del plan persistente. Las dependencias deben
     /// existir y el grafo debe permanecer acíclico.
-    pub fn upsert_task(&self, id: &str, title: &str, depends_on: &[String]) -> Result<()> {
+    pub fn upsert_task(&self, id: &str, title: &str, depends_on: &[String], checks: &[String]) -> Result<()> {
         let id = id.trim();
         let title = title.trim();
         if id.is_empty() || title.is_empty() { bail!("id y title de tarea son obligatorios"); }
@@ -197,6 +203,8 @@ impl GoalState {
         let existing = goal.tasks.iter().position(|task| task.id == id);
         let status = existing.map(|i| goal.tasks[i].status.clone()).unwrap_or(TaskStatus::Pending);
         let evidence = existing.and_then(|i| goal.tasks[i].evidence.clone());
+        let verified = existing.is_some_and(|i| goal.tasks[i].verified);
+        let verification_output = existing.and_then(|i| goal.tasks[i].verification_output.clone());
         if depends_on.iter().collect::<std::collections::HashSet<_>>().len() != depends_on.len() {
             bail!("dependencias duplicadas");
         }
@@ -217,6 +225,9 @@ impl GoalState {
             status,
             depends_on: depends_on.to_vec(),
             evidence,
+            checks: checks.to_vec(),
+            verified,
+            verification_output,
             updated_at: now(),
         };
         let mut proposed = goal.tasks.clone();
@@ -255,6 +266,8 @@ impl GoalState {
         let task = &mut goal.tasks[index];
         task.status = status;
         task.evidence = evidence.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        task.verified = false;
+        task.verification_output = None;
         task.updated_at = now();
         goal.updated_at = now();
         self.save(&disk)?;
@@ -319,6 +332,23 @@ impl GoalState {
         out
     }
 
+    /// Registra el resultado del evaluador determinista de comandos de aceptación.
+    pub fn set_task_verification(&self, id: &str, passed: bool, output: &str) -> Result<()> {
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let task = goal.tasks.iter_mut().find(|task| task.id == id)
+            .ok_or_else(|| anyhow::anyhow!("no existe la tarea {id}"))?;
+        if task.status != TaskStatus::Completed {
+            bail!("la tarea debe estar completada antes de evaluarla");
+        }
+        task.verified = passed;
+        task.verification_output = Some(truncate(output, 4000));
+        task.updated_at = now();
+        goal.updated_at = now();
+        self.save(&disk)?;
+        Ok(())
+    }
+
     pub fn tasks(&self) -> Vec<GoalTask> {
         self.inner.lock().ok()
             .and_then(|disk| disk.active.as_ref().map(|goal| goal.tasks.clone()))
@@ -372,7 +402,7 @@ impl GoalState {
                 return format!("El objetivo {} ya estaba completado.", record.id);
             }
             let unfinished = record.tasks.iter()
-                .filter(|task| task.status != TaskStatus::Completed)
+                .filter(|task| task.status != TaskStatus::Completed || !task.verified)
                 .map(|task| task.id.clone())
                 .collect::<Vec<_>>();
             if !unfinished.is_empty() {
@@ -496,13 +526,15 @@ mod tests {
     fn plan_persistente_valida_dependencias_y_evidencias() {
         let goal = GoalState::new();
         goal.start("objetivo con plan").unwrap();
-        goal.upsert_task("a", "preparar base", &[]).unwrap();
-        goal.upsert_task("b", "validar base", &["a".into()]).unwrap();
+        goal.upsert_task("a", "preparar base", &[], &["cargo test".into()]).unwrap();
+        goal.upsert_task("b", "validar base", &["a".into()], &["cargo clippy".into()]).unwrap();
         assert!(goal.set_task_status("b", TaskStatus::InProgress, None).is_err());
         goal.set_task_status("a", TaskStatus::Completed, Some("tests verdes")).unwrap();
         goal.set_task_status("b", TaskStatus::InProgress, None).unwrap();
         assert!(goal.set_task_status("b", TaskStatus::Completed, None).is_err());
         goal.set_task_status("b", TaskStatus::Completed, Some("auditoría pasada")).unwrap();
+        goal.set_task_verification("a", true, "cargo test: ok").unwrap();
+        goal.set_task_verification("b", true, "cargo clippy: ok").unwrap();
         assert_eq!(goal.tasks().len(), 2);
     }
 
@@ -513,7 +545,7 @@ mod tests {
         let path = dir.join("goal.json");
         let goal = GoalState::open(path.clone()).unwrap();
         goal.start("objetivo durable").unwrap();
-        goal.upsert_task("docs", "documentar", &[]).unwrap();
+        goal.upsert_task("docs", "documentar", &[], &["git diff --check".into()]).unwrap();
         goal.set_task_status("docs", TaskStatus::InProgress, None).unwrap();
         drop(goal);
         let reopened = GoalState::open(path).unwrap();
@@ -526,10 +558,10 @@ mod tests {
     fn plan_rechaza_ciclos_y_dependencias_inexistentes() {
         let goal = GoalState::new();
         goal.start("objetivo con grafo").unwrap();
-        goal.upsert_task("a", "A", &[]).unwrap();
-        assert!(goal.upsert_task("b", "B", &["missing".into()]).is_err());
-        goal.upsert_task("b", "B", &["a".into()]).unwrap();
-        assert!(goal.upsert_task("a", "A", &["b".into()]).is_err());
+        goal.upsert_task("a", "A", &[], &["cargo test".into()]).unwrap();
+        assert!(goal.upsert_task("b", "B", &["missing".into()], &[]).is_err());
+        goal.upsert_task("b", "B", &["a".into()], &[]).unwrap();
+        assert!(goal.upsert_task("a", "A", &["b".into()], &[]).is_err());
     }
 
     #[test]
@@ -560,10 +592,12 @@ mod tests {
     fn no_permite_reabrir_dependencia_de_tarea_completada() {
         let goal = GoalState::new();
         goal.start("dependencias estables").unwrap();
-        goal.upsert_task("a", "base", &[]).unwrap();
-        goal.upsert_task("b", "integración", &["a".into()]).unwrap();
+        goal.upsert_task("a", "base", &[], &["cargo test".into()]).unwrap();
+        goal.upsert_task("b", "integración", &["a".into()], &["cargo clippy".into()]).unwrap();
         goal.set_task_status("a", TaskStatus::Completed, Some("base verificada")).unwrap();
+        goal.set_task_verification("a", true, "cargo test: ok").unwrap();
         goal.set_task_status("b", TaskStatus::Completed, Some("integración verificada")).unwrap();
+        goal.set_task_verification("b", true, "cargo clippy: ok").unwrap();
         assert!(goal.set_task_status("a", TaskStatus::Pending, None).is_err());
         assert!(goal.upsert_task("a", "base", &["b".into()]).is_err());
     }
@@ -572,10 +606,11 @@ mod tests {
     fn no_permite_cerrar_objetivo_con_tareas_pendientes() {
         let goal = GoalState::new();
         goal.start("objetivo dividido en tareas").unwrap();
-        goal.upsert_task("compile", "compilar", &[]).unwrap();
+        goal.upsert_task("compile", "compilar", &[], &["cargo test".into()]).unwrap();
         assert!(goal.ack("el agente afirma que terminó").starts_with("Rechazado"));
         assert!(!goal.is_done());
         goal.set_task_status("compile", TaskStatus::Completed, Some("cargo test: ok")).unwrap();
+        goal.set_task_verification("compile", true, "cargo test: ok").unwrap();
         assert!(goal.ack("tests ejecutados y resultado comprobado").contains("cumplida"));
         assert!(goal.is_done());
     }
