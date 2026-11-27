@@ -289,6 +289,13 @@ impl GoalState {
         let Some(cycle) = record.active_cycle else { return Ok(None) };
         let canonical = serde_json::to_vec(args)?;
         let fingerprint = stable_fingerprint(&canonical);
+        if record.operations.iter().any(|operation| {
+            operation.tool == tool
+                && operation.args_fingerprint == fingerprint
+                && operation.status == OperationStatus::Unknown
+        }) {
+            bail!("operación bloqueada: existe una ejecución anterior con el mismo fingerprint y resultado desconocido; reconcilia el efecto externo antes de intentar repetirla");
+        }
         let sequence = record.operations.iter().filter(|op| op.cycle == cycle).count() + 1;
         let id = format!("cycle-{cycle}-op-{sequence}");
         record.operations.push(OperationRecord {
@@ -323,6 +330,29 @@ impl GoalState {
         operation.result_summary = Some(truncate(result, 800));
         record.updated_at = now();
         self.save(&disk)
+    }
+
+    /// Instrucciones explícitas para reanudar sin repetir efectos externos ambiguos.
+    pub fn recovery_prompt(&self, limit: usize) -> String {
+        let operations = self.inner.lock().ok()
+            .and_then(|disk| disk.active.as_ref().map(|goal| {
+                goal.operations.iter().rev()
+                    .filter(|operation| operation.status == OperationStatus::Unknown)
+                    .take(limit)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })).unwrap_or_default();
+        if operations.is_empty() { return String::new(); }
+        let mut out = String::from(
+            "RECUPERACIÓN DE OPERACIONES INTERRUMPIDAS: NO repitas ninguna operación UNKNOWN ni su efecto externo. Primero busca evidencia para reconciliar si se ejecutó. Si no puedes determinarlo, informa del bloqueo y pide intervención; una estrategia distinta debe producir una operación nueva y justificada.\n"
+        );
+        for operation in operations.iter().rev() {
+            out.push_str(&format!(
+                "- {} | herramienta: {} | fingerprint: {} | resultado: desconocido; no repetir\n",
+                operation.id, operation.tool, operation.args_fingerprint
+            ));
+        }
+        out
     }
 
     /// Añade el resultado de un ciclo. El resumen no se interpreta como éxito.
