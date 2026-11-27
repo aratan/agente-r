@@ -1576,7 +1576,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-            // Cada 100 ciclos simulamos una caída tras registrar la intención,
+            // Cada 20 ciclos simulamos una caída tras registrar la intención,
             // antes de guardar el resultado de la operación.
             if index % 20 == 0 {
                 drop(goal);
