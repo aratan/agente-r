@@ -217,6 +217,7 @@ impl ToolRegistry {
         // entrega evidencias a su padre, pero no puede finalizar la misión.
         if depth == 0 {
             reg.add(GoalPlanTool { goal: orch.goal.clone() });
+            reg.add(GoalFailureTool { goal: orch.goal.clone() });
             reg.add(GoalDoneTool {
                 goal: orch.goal.clone(),
             });
@@ -1569,6 +1570,40 @@ impl Tool for GoalPlanTool {
             }
             _ => bail!("acción desconocida para goal_task: {action}"),
         }
+    }
+}
+
+struct GoalFailureTool {
+    goal: Arc<crate::goals::GoalState>,
+}
+
+impl Tool for GoalFailureTool {
+    fn name(&self) -> &str { "goal_failure" }
+    fn description(&self) -> &str {
+        "Registra un fallo, su síntoma y la estrategia intentada en el diario persistente. Debe llamarse antes de reintentar. Repetir el mismo fingerprint y estrategia se bloquea salvo que condition_changed=true y se explique el cambio."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "fingerprint": {"type": "string"},
+                "category": {"type": "string"},
+                "symptom": {"type": "string"},
+                "strategy": {"type": "string"},
+                "condition_changed": {"type": "boolean"}
+            },
+            "required": ["fingerprint", "category", "symptom", "strategy", "condition_changed"]
+        })
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let fingerprint = req_str(args, "fingerprint")?;
+        let category = req_str(args, "category")?;
+        let symptom = req_str(args, "symptom")?;
+        let strategy = req_str(args, "strategy")?;
+        let condition_changed = args.get("condition_changed").and_then(Value::as_bool)
+            .ok_or_else(|| anyhow!("condition_changed debe ser boolean"))?;
+        self.goal.record_failure(&fingerprint, &category, &symptom, &strategy, condition_changed)?;
+        Ok(format!("Fallo registrado: {fingerprint}. La estrategia queda en el diario persistente."))
     }
 }
 
