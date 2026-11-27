@@ -70,8 +70,8 @@ ENTORNO
   AGENT_WEB_MIN_INTERVAL_MS, AGENT_MEMORY_MAX, TELEGRAM_BOT_TOKEN,
   AGENT_PIPER_MODEL, AGENT_WHISPER_MODEL
 
-REPL: /help · /goal <texto> · /model <nombre> · /models · /info · /memory
-      /improve · /new · /exit";
+REPL: /help · /goal <texto> · /goal-resolve <id> <applied|not-applied> <evidencia>
+      /model <nombre> · /models · /info · /memory · /improve · /new · /exit";
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -656,6 +656,28 @@ fn repl(
                     }
                     match agent.pursue(goal.trim(), goal_attempts) {
                         Ok(answer) => println!("\n{answer}\n"),
+                        Err(err) => eprintln!("error: {err:#}"),
+                    }
+                }
+                Err(err) => eprintln!("error: {err:#}"),
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("/goal-resolve ") {
+            let mut parts = rest.splitn(3, ' ');
+            let id = parts.next().unwrap_or("").trim();
+            let outcome = parts.next().unwrap_or("").trim();
+            let evidence = parts.next().unwrap_or("").trim();
+            if id.is_empty() || evidence.is_empty() || !matches!(outcome, "applied" | "not-applied") {
+                eprintln!("uso: /goal-resolve <id> <applied|not-applied> <evidencia>");
+                continue;
+            }
+            match DaemonLock::acquire(orchestra.workspace.root()) {
+                Ok(_goal_lock) => {
+                    let result = orchestra.goal.recover_interrupted()
+                        .and_then(|_| orchestra.goal.resolve_operation(id, outcome == "applied", evidence));
+                    match result {
+                        Ok(()) => println!("operación {id} reconciliada: {outcome}"),
                         Err(err) => eprintln!("error: {err:#}"),
                     }
                 }
