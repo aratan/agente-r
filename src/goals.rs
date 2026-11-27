@@ -582,6 +582,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn historial_de_ciclos_se_acota_sin_perder_contador_total() {
+        let goal = GoalState::new();
+        goal.start("stress").unwrap();
+        for cycle in 0..1_200 {
+            goal.record_attempt(&format!("resultado {cycle}")).unwrap();
+        }
+        assert_eq!(goal.attempts(), 1_200);
+        let history = goal.previous_summaries(600);
+        assert_eq!(history.len(), 500);
+        assert_eq!(history.first().map(String::as_str), Some("resultado 700"));
+        assert_eq!(history.last().map(String::as_str), Some("resultado 1199"));
+    }
+
+    #[test]
     fn governor_limita_ciclos_por_hora_y_presupuesto_total() {
         let goal = GoalState::new();
         goal.start("presupuesto").unwrap();
