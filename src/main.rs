@@ -3,6 +3,7 @@
 
 mod agent;
 mod browser;
+mod daemon_lock;
 mod ext;
 mod goals;
 mod hardware;
@@ -26,6 +27,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::agent::{Agent, AgentOptions};
+use crate::daemon_lock::DaemonLock;
 use crate::browser::Browser;
 use crate::goals::GoalState;
 use crate::hardware::Specs;
@@ -469,6 +471,8 @@ fn daemon(
     initial_goal: Option<&str>,
     goal_attempts: usize,
 ) -> Result<()> {
+    // Impide que dos procesos compitan por el mismo objetivo persistente.
+    let _daemon_lock = DaemonLock::acquire(orchestra.workspace.root())?;
     if let Some(goal) = initial_goal {
         orchestra.goal.start(goal)?;
     }
