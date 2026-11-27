@@ -136,14 +136,14 @@ impl Agent {
                 let out = match self.tools.run(&call.name, &call.args) {
                     Ok(text) => {
                         if let (Some(goal), Some(id)) = (&self.opts.goal, operation_id.as_deref()) {
-                            goal.finish_operation(id, true, &text)?;
+                            goal.finish_operation(id, true, "ejecución completada; salida no duplicada en el journal")?;
                         }
                         text
                     }
                     Err(err) => {
                         let message = format!("ERROR: {err:#}");
                         if let (Some(goal), Some(id)) = (&self.opts.goal, operation_id.as_deref()) {
-                            goal.finish_operation(id, false, &message)?;
+                            goal.finish_operation(id, false, "la herramienta devolvió error; consulta la traza del ciclo")?;
                         }
                         message
                     }
