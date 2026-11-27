@@ -42,7 +42,7 @@ fn run_bin(bin: &str, args: &[&str]) -> Result<String> {
     let mut text = stdout;
     if !stderr.is_empty() {
         if !text.is_empty() {
-            text.push_str("\n");
+            text.push('\n');
         }
         text.push_str(&stderr);
     }
@@ -654,7 +654,7 @@ pub fn voice_listen(seconds: u64) -> Result<String> {
         let model = model.ok_or_else(|| {
             anyhow!("define AGENT_WHISPER_MODEL=/ruta/ggml-base.bin para whisper-cli")
         })?;
-        let out = run_bin(
+        run_bin(
             "whisper-cli",
             &[
                 "-m",
@@ -665,8 +665,7 @@ pub fn voice_listen(seconds: u64) -> Result<String> {
                 "es",
                 "-nt",
             ],
-        )?;
-        out
+        )?
     } else if which("whisper").is_some() {
         run_bin(
             "whisper",

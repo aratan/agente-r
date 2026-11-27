@@ -1,5 +1,7 @@
 # local-agent
 
+[![CI](https://github.com/aratan/agente-r/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/aratan/agente-r/actions/workflows/ci.yml)
+
 Agente LLM **local** en Rust sobre **Ollama (:11434)** o **llama.cpp `llama-server` (:8083)**,
 con RAG, buscador web gratuito, memoria persistente, auto-mejora acotada, subagentes
 recursivos, agenda, y control de shell, ficheros, navegador, multimedia, escritorio,

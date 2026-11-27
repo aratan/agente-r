@@ -103,10 +103,10 @@ impl Browser {
         let list: Value = serde_json::from_str(&raw)?;
         if let Some(pages) = list.as_array() {
             for page in pages {
-                if page["type"] == "page" {
-                    if let Some(url) = page["webSocketDebuggerUrl"].as_str() {
-                        return Ok(url.to_string());
-                    }
+                if page["type"] == "page"
+                    && let Some(url) = page["webSocketDebuggerUrl"].as_str()
+                {
+                    return Ok(url.to_string());
                 }
             }
         }

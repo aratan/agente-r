@@ -139,12 +139,12 @@ impl Memory {
         }
 
         let mut version = 1;
-        if let Some(old_id) = replaces {
-            if let Some(pos) = self.disk.entries.iter().position(|e| e.id == old_id) {
-                let old = self.disk.entries.remove(pos);
-                version = old.version + 1;
-                self.disk.superseded.push(old);
-            }
+        if let Some(old_id) = replaces
+            && let Some(pos) = self.disk.entries.iter().position(|e| e.id == old_id)
+        {
+            let old = self.disk.entries.remove(pos);
+            version = old.version + 1;
+            self.disk.superseded.push(old);
         }
 
         self.disk.entries.push(Entry {
@@ -213,7 +213,7 @@ impl Memory {
             .iter()
             .filter(|e| kind.is_none_or(|k| e.kind == k))
             .collect();
-        entries.sort_by(|a, b| b.created.cmp(&a.created));
+        entries.sort_by_key(|a| std::cmp::Reverse(a.created));
         entries.truncate(limit);
         entries
     }

@@ -284,12 +284,12 @@ fn run() -> Result<()> {
     // Modelo de chat: nunca un modelo de embeddings (bug de la v0.1).
     let model = match &cfg.model {
         Some(name) => {
-            if let Some(found) = models.iter().find(|m| &m.id == name) {
-                if found.is_embedding() {
-                    bail!(
-                        "'{name}' es un modelo de embeddings y no sirve para chat; usa `/models` para ver los válidos"
-                    );
-                }
+            if let Some(found) = models.iter().find(|m| &m.id == name)
+                && found.is_embedding()
+            {
+                bail!(
+                    "'{name}' es un modelo de embeddings y no sirve para chat; usa `/models` para ver los válidos"
+                );
             }
             name.clone()
         }
@@ -433,10 +433,10 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
     }
     if let Ok(downloads) = Downloads::open(orchestra.downloads.clone()) {
         out.push_str(&format!(
-            "Descargas de modelos: {}/{} ({}) {:?}\n",
+            "Descargas de modelos: {}/{} (quedan {}) {:?}\n",
             downloads.used(),
             MAX_DOWNLOADS,
-            format!("quedan {}", downloads.remaining()),
+            downloads.remaining(),
             downloads.pulled()
         ));
     }
@@ -573,11 +573,11 @@ fn repl(
         }
         if let Some(name) = line.strip_prefix("/model ") {
             let name = name.trim();
-            if let Some(found) = orchestra.models.iter().find(|m| m.id == name) {
-                if found.is_embedding() {
-                    eprintln!("'{name}' es de embeddings, no sirve para chat");
-                    continue;
-                }
+            if let Some(found) = orchestra.models.iter().find(|m| m.id == name)
+                && found.is_embedding()
+            {
+                eprintln!("'{name}' es de embeddings, no sirve para chat");
+                continue;
             }
             agent.set_provider(orchestra.backend.provider(name));
             println!("modelo activo: {name}");

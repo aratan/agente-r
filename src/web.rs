@@ -226,17 +226,16 @@ fn one_engine(
 
 /// Bing (y DDG) devuelven redirecciones; se resuelve la URL real.
 fn real_url(href: &str) -> String {
-    if href.contains("bing.com/ck/a") {
-        if let Some(pos) = href.find("&u=a1") {
-            let rest = &href[pos + 5..];
-            let end = rest.find('&').unwrap_or(rest.len());
-            if let Some(bytes) = base64url_decode(&rest[..end]) {
-                if let Ok(text) = String::from_utf8(bytes) {
-                    if text.starts_with("http") {
-                        return text;
-                    }
-                }
-            }
+    if href.contains("bing.com/ck/a")
+        && let Some(pos) = href.find("&u=a1")
+    {
+        let rest = &href[pos + 5..];
+        let end = rest.find('&').unwrap_or(rest.len());
+        if let Some(bytes) = base64url_decode(&rest[..end])
+            && let Ok(text) = String::from_utf8(bytes)
+            && text.starts_with("http")
+        {
+            return text;
         }
     }
     if let Some(pos) = href.find("uddg=") {
