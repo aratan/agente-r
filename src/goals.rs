@@ -948,6 +948,35 @@ mod tests {
     }
 
     #[test]
+    fn goal_json_legacy_migra_sin_campos_de_journal() {
+        let dir = std::env::temp_dir().join(format!("agent-goal-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("goal.json");
+        std::fs::write(&path, r#"{
+            "active": {
+                "id": "legacy",
+                "goal": "objetivo anterior",
+                "status": "active",
+                "created_at": 1,
+                "updated_at": 1,
+                "attempts": [],
+                "attempt_count": 0,
+                "tasks": [],
+                "failures": []
+            },
+            "completed": []
+        }"#).unwrap();
+        let goal = GoalState::open(path).unwrap();
+        let record = goal.active().unwrap();
+        assert!(record.cycles.is_empty());
+        assert!(record.operations.is_empty());
+        assert!(record.active_cycle.is_none());
+        assert_eq!(record.goal, "objetivo anterior");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn operacion_interrumpida_se_marca_unknown_y_no_se_repite() {
         let dir = std::env::temp_dir().join(format!("agent-op-recovery-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
