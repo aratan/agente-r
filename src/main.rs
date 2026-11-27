@@ -407,6 +407,12 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
         if let Some(reason) = &goal.pause_reason {
             out.push_str(&format!("  Motivo de pausa: {}\\n", memory::truncate(reason, 160)));
         }
+        let pending = goal.tasks.iter().filter(|task| task.status == goals::TaskStatus::Pending).count();
+        let in_progress = goal.tasks.iter().filter(|task| task.status == goals::TaskStatus::InProgress).count();
+        let completed = goal.tasks.iter().filter(|task| task.status == goals::TaskStatus::Completed).count();
+        let verified = goal.tasks.iter().filter(|task| task.verified).count();
+        out.push_str(&format!("  Plan: {} tareas · {} pendientes · {} en curso · {} completadas · {} verificadas\\n",
+            goal.tasks.len(), pending, in_progress, completed, verified));
     }
     out.push_str(&format!(
         "Backend: {} · {}\n",
