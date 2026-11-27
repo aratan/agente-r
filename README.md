@@ -114,6 +114,9 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
 - El governor pausa el objetivo tras tres resultados consecutivos idénticos (incluidos errores
   del proveedor), registra el motivo y evita quemar ciclos sin progreso. Para reanudar, vuelve
   a pasar el mismo objetivo con `--goal`; un objetivo pausado no se sustituye por otro.
+- Presupuesto por defecto: 120 ciclos por hora y 50.000 ciclos acumulados por objetivo.
+  Ajustable con `AGENT_GOAL_MAX_CYCLES_PER_HOUR` y `AGENT_GOAL_MAX_CYCLES_TOTAL`; al
+  agotarse, el objetivo se pausa y solo se reanuda explícitamente tras revisar el consumo.
 - El diario causal conserva hasta 200 fallos con fingerprint, categoría, síntoma y estrategia
   probada. `goal_failure` bloquea repetir el mismo fingerprint+estrategia salvo que el agente
   declare y describa un cambio de condiciones; los últimos fallos se inyectan en los ciclos
