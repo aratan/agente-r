@@ -535,6 +535,17 @@ mod tests {
     }
 
     #[test]
+    fn cambiar_checks_invalida_verificacion_anterior() {
+        let goal = GoalState::new();
+        goal.start("checks versionados").unwrap();
+        goal.upsert_task("test", "tests", &[], &["cargo test".into()]).unwrap();
+        goal.set_task_status("test", TaskStatus::Completed, Some("tests ejecutados")).unwrap();
+        goal.set_task_verification("test", true, "cargo test: ok").unwrap();
+        goal.upsert_task("test", "tests", &[], &["cargo check".into()]).unwrap();
+        assert!(!goal.tasks()[0].verified);
+    }
+
+    #[test]
     fn plan_persistente_valida_dependencias_y_evidencias() {
         let goal = GoalState::new();
         goal.start("objetivo con plan").unwrap();
@@ -622,6 +633,7 @@ mod tests {
         assert!(goal.ack("el agente afirma que terminó").starts_with("Rechazado"));
         assert!(!goal.is_done());
         goal.set_task_status("compile", TaskStatus::Completed, Some("cargo test: ok")).unwrap();
+        assert!(goal.ack("el agente afirma que pasó").starts_with("Rechazado"));
         goal.set_task_verification("compile", true, "cargo test: ok").unwrap();
         assert!(goal.ack("tests ejecutados y resultado comprobado").contains("cumplida"));
         assert!(goal.is_done());
