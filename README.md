@@ -89,6 +89,7 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
   también reanuda un objetivo activo al reiniciarse. Los resultados se anexan a
   `.agent/runs/goal.log`.
 - `--daemon-once` ejecuta un lote y sale; `--daemon` mantiene el proceso vivo.
+- El daemon adquiere un bloqueo exclusivo del workspace (`.agent/daemon.lock`) mediante `flock`; una segunda instancia falla sin tocar el objetivo. El kernel libera el bloqueo al morir el proceso, por lo que no quedan locks obsoletos tras un crash.
 - Los resúmenes de los últimos 500 ciclos se conservan para continuidad; el contador total
   es acumulativo. Se archivan hasta 100 objetivos completados.
 - Solo el agente raíz puede cerrar el objetivo global mediante `goal_done`. Los subagentes
