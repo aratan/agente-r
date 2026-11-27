@@ -135,29 +135,29 @@ impl GoalState {
         let goal = goal.trim();
         if goal.is_empty() { bail!("el objetivo no puede estar vacío"); }
         let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        match &disk.active {
-            Some(current) if current.goal == goal && current.status == GoalStatus::Active => return Ok(()),
-            Some(current) if current.goal == goal && current.status == GoalStatus::Paused => {
-                let record = disk.active.as_mut().expect("objetivo presente");
-                record.status = GoalStatus::Active;
-                record.pause_reason = None;
-                record.updated_at = now();
-                self.save(&disk)?;
-                return Ok(());
-            }
-            Some(current) if current.goal == goal && current.status == GoalStatus::Completed => return Ok(()),
-            Some(current) if current.status == GoalStatus::Active || current.status == GoalStatus::Paused => {
-                bail!("hay un objetivo activo o pausado ({}): {}; reanúdalo o complétalo antes de iniciar otro", current.id, current.goal)
-            }
-            Some(_) => {
-                if let Some(completed) = disk.active.take() {
-                    disk.completed.push(completed);
-                    if disk.completed.len() > 100 {
-                        disk.completed.remove(0);
+        if let Some(current) = disk.active.as_ref() {
+            if current.goal == goal {
+                match current.status {
+                    GoalStatus::Active | GoalStatus::Completed => return Ok(()),
+                    GoalStatus::Paused => {
+                        let record = disk.active.as_mut().expect("objetivo presente");
+                        record.status = GoalStatus::Active;
+                        record.pause_reason = None;
+                        record.updated_at = now();
+                        self.save(&disk)?;
+                        return Ok(());
                     }
                 }
             }
-            None => {}
+            if current.status == GoalStatus::Active || current.status == GoalStatus::Paused {
+                bail!("hay un objetivo activo o pausado ({}): {}; reanúdalo o complétalo antes de iniciar otro", current.id, current.goal);
+            }
+        }
+        if let Some(completed) = disk.active.take() {
+            disk.completed.push(completed);
+            if disk.completed.len() > 100 {
+                disk.completed.remove(0);
+            }
         }
         let now = now();
         disk.active = Some(GoalRecord {
