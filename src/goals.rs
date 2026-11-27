@@ -1838,10 +1838,7 @@ mod tests {
         let path = std::env::var_os("AGENT_GOAL_SOAK_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                std::env::temp_dir().join(format!(
-                    "agente-r-goal-soak-{}.json",
-                    std::process::id()
-                ))
+                std::env::temp_dir().join(format!("agente-r-goal-soak-{}.json", std::process::id()))
             });
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -1902,7 +1899,11 @@ mod tests {
             peak_file_bytes = peak_file_bytes.max(metadata.len());
             if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
                 if let Some(rss) = status.lines().find(|line| line.starts_with("VmRSS:")) {
-                    if let Some(kib) = rss.split_whitespace().nth(1).and_then(|value| value.parse().ok()) {
+                    if let Some(kib) = rss
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|value| value.parse().ok())
+                    {
                         peak_rss_kib = peak_rss_kib.max(kib);
                     }
                 }
@@ -1936,5 +1937,4 @@ mod tests {
             path.display()
         );
     }
-
 }
