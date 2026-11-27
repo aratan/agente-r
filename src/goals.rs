@@ -184,13 +184,11 @@ impl GoalState {
                 recovered += 1;
             }
         }
-        if let Some(cycle_number) = record.active_cycle.take() {
-            record.cycles.iter_mut()
-                .find(|cycle| cycle.number == cycle_number)
-                .map(|cycle| {
-                    cycle.interrupted = true;
-                    cycle.finished_at = Some(now());
-                });
+        if let Some(cycle) = record.active_cycle.take().and_then(|cycle_number| {
+            record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number)
+        }) {
+            cycle.interrupted = true;
+            cycle.finished_at = Some(now());
             recovered += 1;
         }
         if recovered > 0 {
@@ -361,10 +359,10 @@ impl GoalState {
         if record.status != GoalStatus::Active { bail!("el objetivo no está activo"); }
         record.attempt_count += 1;
         let number = record.attempt_count;
-        if let Some(cycle_number) = record.active_cycle.take() {
-            if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number) {
-                cycle.finished_at = Some(now());
-            }
+        if let Some(cycle) = record.active_cycle.take().and_then(|cycle_number| {
+            record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number)
+        }) {
+            cycle.finished_at = Some(now());
         }
         record.attempts.push(AttemptRecord {
             number,
