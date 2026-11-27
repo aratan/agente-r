@@ -451,6 +451,9 @@ impl GoalState {
             if record.status == GoalStatus::Completed {
                 return format!("El objetivo {} ya estaba completado.", record.id);
             }
+            if record.status == GoalStatus::Paused {
+                return "Rechazado: el objetivo está pausado por el governor; reanúdalo explícitamente antes de cerrarlo.".to_string();
+            }
             let unfinished = record.tasks.iter()
                 .filter(|task| task.status != TaskStatus::Completed || !task.verified)
                 .map(|task| task.id.clone())
