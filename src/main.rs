@@ -398,6 +398,7 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
             goal.id,
             match goal.status {
                 goals::GoalStatus::Active => "activo",
+                goals::GoalStatus::Paused => "pausado por estancamiento",
                 goals::GoalStatus::Completed => "completado",
             },
             goal.attempt_count
