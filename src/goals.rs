@@ -1846,7 +1846,10 @@ mod tests {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
-        let _ = std::fs::remove_file(&path);
+        assert!(
+            !path.exists(),
+            "el archivo de soak ya existe; conserva los datos y configura otra ruta"
+        );
 
         let goal = GoalState::open(path.clone()).unwrap();
         goal.start("soak sintético de persistencia").unwrap();
