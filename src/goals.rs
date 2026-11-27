@@ -1819,4 +1819,118 @@ mod tests {
         assert!(prompt.contains("falló la compilación"));
         assert!(prompt.contains("resultado global"));
     }
+
+    /// Ensayo prolongado manual. No se ejecuta en CI: por defecto dura 48 horas.
+    /// Ejecutar con scripts/goal-soak.sh; solo usa operaciones sintéticas locales.
+    #[test]
+    #[ignore = "soak prolongado manual; ejecutar con scripts/goal-soak.sh"]
+    fn soak_durable_goal_state_for_configured_duration() {
+        use std::time::{Duration, Instant};
+
+        let seconds = std::env::var("AGENT_GOAL_SOAK_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(172_800);
+        let interval_ms = std::env::var("AGENT_GOAL_SOAK_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1_000);
+        let path = std::env::var_os("AGENT_GOAL_SOAK_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "agente-r-goal-soak-{}.json",
+                    std::process::id()
+                ))
+            });
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let _ = std::fs::remove_file(&path);
+
+        let goal = GoalState::open(path.clone()).unwrap();
+        goal.start("soak sintético de persistencia").unwrap();
+        drop(goal);
+
+        let started = Instant::now();
+        let duration = Duration::from_secs(seconds);
+        let interval = Duration::from_millis(interval_ms);
+        let mut iterations = 0u64;
+        let mut recoveries = 0u64;
+        let mut peak_file_bytes = 0u64;
+        let mut peak_rss_kib = 0u64;
+        let mut next_report = Duration::ZERO;
+
+        while started.elapsed() < duration {
+            let goal = GoalState::open(path.clone()).unwrap();
+            goal.begin_cycle().unwrap();
+            let operation_id = goal
+                .begin_operation(
+                    "soak.synthetic",
+                    &serde_json::json!({"iteration": iterations}),
+                )
+                .unwrap()
+                .expect("el ciclo activo debe aceptar operaciones");
+
+            if iterations % 17 == 0 {
+                // Simula caída entre el registro de intención y el resultado.
+                drop(goal);
+                let recovered = GoalState::open(path.clone()).unwrap();
+                assert!(recovered.recover_interrupted().unwrap() >= 1);
+                recovered
+                    .resolve_operation(
+                        &operation_id,
+                        true,
+                        "efecto sintético confirmado por el propio harness",
+                    )
+                    .unwrap();
+                recovered
+                    .record_attempt("interrupción sintética recuperada")
+                    .unwrap();
+                recoveries += 1;
+            } else {
+                goal.finish_operation(&operation_id, true, "resultado sintético correcto")
+                    .unwrap();
+                goal.record_attempt("ciclo sintético completado").unwrap();
+            }
+            iterations += 1;
+
+            let metadata = std::fs::metadata(&path).unwrap();
+            peak_file_bytes = peak_file_bytes.max(metadata.len());
+            if let Ok(status) = std::fs::read_to_string("/proc/self/status")
+                && let Some(rss) = status.lines().find(|line| line.starts_with("VmRSS:"))
+                && let Some(kib) = rss.split_whitespace().nth(1).and_then(|v| v.parse().ok())
+            {
+                peak_rss_kib = peak_rss_kib.max(kib);
+            }
+
+            if started.elapsed() >= next_report {
+                eprintln!(
+                    "goal-soak elapsed={}s iterations={} recoveries={} file_bytes={} peak_file_bytes={} peak_rss_kib={}",
+                    started.elapsed().as_secs(),
+                    iterations,
+                    recoveries,
+                    metadata.len(),
+                    peak_file_bytes,
+                    peak_rss_kib
+                );
+                next_report += Duration::from_secs(60);
+            }
+            std::thread::sleep(interval);
+        }
+
+        let final_state = GoalState::open(path.clone()).unwrap();
+        let record = final_state.active().unwrap();
+        assert_eq!(record.status, GoalStatus::Active);
+        assert!(record.cycles.len() <= 200);
+        assert!(record.attempts.len() <= 500);
+        assert!(record.operations.len() <= 1_000);
+        assert!(std::fs::metadata(&path).unwrap().len() < 2 * 1024 * 1024);
+        assert!(recoveries > 0 || iterations == 0);
+        eprintln!(
+            "goal-soak complete: iterations={iterations} recoveries={recoveries} peak_file_bytes={peak_file_bytes} peak_rss_kib={peak_rss_kib} state={}",
+            path.display()
+        );
+    }
+
 }
