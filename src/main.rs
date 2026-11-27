@@ -404,6 +404,9 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
             goal.attempt_count
         ));
         out.push_str(&format!("  {}\n", memory::truncate(&goal.goal, 180)));
+        if let Some(reason) = &goal.pause_reason {
+            out.push_str(&format!("  Motivo de pausa: {}\\n", memory::truncate(reason, 160)));
+        }
     }
     out.push_str(&format!(
         "Backend: {} · {}\n",
