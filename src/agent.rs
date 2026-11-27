@@ -232,6 +232,7 @@ impl Agent {
                 prompt.push('\n');
                 prompt.push_str(&state.plan_prompt());
                 prompt.push_str(&state.failure_prompt(8));
+                prompt.push_str(&state.recovery_prompt(20));
             }
             if let Some(state) = &state {
                 // El checkpoint existe antes de la llamada al modelo, incluso si
