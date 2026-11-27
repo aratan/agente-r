@@ -957,7 +957,8 @@ mod tests {
         goal.finish_operation(&id, true, "archivo escrito").unwrap();
         drop(goal);
         let reopened = GoalState::open(path).unwrap();
-        let operation = &reopened.active().unwrap().operations[0];
+        let recovered_record = reopened.active().unwrap();
+        let operation = &recovered_record.operations[0];
         assert_eq!(operation.status, OperationStatus::Succeeded);
         assert_eq!(operation.result_summary.as_deref(), Some("archivo escrito"));
         assert!(operation.args_fingerprint.starts_with("fnv1a64:"));
