@@ -256,7 +256,7 @@ fn run() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(64 * 1024);
 
-    let goal = Arc::new(GoalState::new());
+    let goal = Arc::new(GoalState::open(goals::state_path(workspace.root()))?);
     let orchestra = Arc::new(Orchestra::new(
         backend.clone(),
         specs.clone(),
