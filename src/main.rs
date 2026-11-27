@@ -353,6 +353,7 @@ fn run() -> Result<()> {
     }
     if let Some(goal_text) = &cfg.goal {
         let _goal_lock = DaemonLock::acquire(workspace.root())?;
+        orchestra.goal.recover_interrupted()?;
         let answer = agent.pursue(goal_text, cfg.goal_attempts)?;
         println!("\n{answer}");
         return Ok(());
@@ -488,6 +489,7 @@ fn daemon(
 ) -> Result<()> {
     // Impide que dos procesos compitan por el mismo objetivo persistente.
     let _daemon_lock = DaemonLock::acquire(orchestra.workspace.root())?;
+    orchestra.goal.recover_interrupted()?;
     if let Some(goal) = initial_goal {
         orchestra.goal.start(goal)?;
     }
@@ -647,10 +649,16 @@ fn repl(
         }
         if let Some(goal) = line.strip_prefix("/goal ") {
             match DaemonLock::acquire(orchestra.workspace.root()) {
-                Ok(_goal_lock) => match agent.pursue(goal.trim(), goal_attempts) {
-                    Ok(answer) => println!("\n{answer}\n"),
-                    Err(err) => eprintln!("error: {err:#}"),
-                },
+                Ok(_goal_lock) => {
+                    if let Err(err) = orchestra.goal.recover_interrupted() {
+                        eprintln!("error: {err:#}");
+                        continue;
+                    }
+                    match agent.pursue(goal.trim(), goal_attempts) {
+                        Ok(answer) => println!("\\n{answer}\\n"),
+                        Err(err) => eprintln!("error: {err:#}"),
+                    }
+                }
                 Err(err) => eprintln!("error: {err:#}"),
             }
             continue;
