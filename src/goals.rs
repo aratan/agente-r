@@ -34,6 +34,8 @@ pub struct GoalRecord {
     #[serde(default)]
     pub attempts: Vec<AttemptRecord>,
     #[serde(default)]
+    pub attempt_count: u64,
+    #[serde(default)]
     pub evidence: Option<String>,
 }
 
@@ -41,6 +43,8 @@ pub struct GoalRecord {
 struct Disk {
     #[serde(default)]
     active: Option<GoalRecord>,
+    #[serde(default)]
+    completed: Vec<GoalRecord>,
 }
 
 pub struct GoalState {
@@ -91,10 +95,17 @@ impl GoalState {
         match &disk.active {
             Some(current) if current.goal == goal => return Ok(()),
             Some(current) if current.status == GoalStatus::Active => {
-                bail!("ya existe un objetivo activo ({}): {}; complétalo o archívalo antes de iniciar otro", current.id, current.goal)
+                bail!("ya existe un objetivo activo ({}): {}; complétalo antes de iniciar otro", current.id, current.goal)
             }
-            Some(current) if current.goal == goal => return Ok(()),
-            _ => {}
+            Some(_) => {
+                if let Some(completed) = disk.active.take() {
+                    disk.completed.push(completed);
+                    if disk.completed.len() > 100 {
+                        disk.completed.remove(0);
+                    }
+                }
+            }
+            None => {}
         }
         let now = now();
         disk.active = Some(GoalRecord {
@@ -104,6 +115,7 @@ impl GoalState {
             created_at: now,
             updated_at: now,
             attempts: Vec::new(),
+            attempt_count: 0,
             evidence: None,
         });
         self.save(&disk)?;
@@ -115,7 +127,8 @@ impl GoalState {
         let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
         let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
         if record.status == GoalStatus::Completed { bail!("el objetivo ya está completado"); }
-        let number = record.attempts.len() as u64 + 1;
+        record.attempt_count += 1;
+        let number = record.attempt_count;
         record.attempts.push(AttemptRecord {
             number,
             at: now(),
@@ -133,7 +146,7 @@ impl GoalState {
 
     pub fn attempts(&self) -> u64 {
         self.inner.lock().ok()
-            .and_then(|d| d.active.as_ref().map(|g| g.attempts.len() as u64))
+            .and_then(|d| d.active.as_ref().map(|g| g.attempt_count))
             .unwrap_or(0)
     }
 
@@ -166,8 +179,10 @@ impl GoalState {
         match self.save(&disk) {
             Ok(()) => format!("Meta marcada como cumplida con evidencia: {evidence}"),
             Err(err) => {
-                record.status = GoalStatus::Active;
-                record.evidence = None;
+                if let Some(record) = disk.active.as_mut() {
+                    record.status = GoalStatus::Active;
+                    record.evidence = None;
+                }
                 format!("No se pudo persistir la finalización; la meta sigue activa: {err:#}")
             }
         }
