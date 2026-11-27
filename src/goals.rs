@@ -425,6 +425,22 @@ mod tests {
     }
 
     #[test]
+    fn plan_y_estado_de_tareas_sobreviven_a_reapertura() {
+        let dir = std::env::temp_dir().join(format!("agent-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("goal.json");
+        let goal = GoalState::open(path.clone()).unwrap();
+        goal.start("objetivo durable").unwrap();
+        goal.upsert_task("docs", "documentar", &[]).unwrap();
+        goal.set_task_status("docs", TaskStatus::InProgress, None).unwrap();
+        drop(goal);
+        let reopened = GoalState::open(path).unwrap();
+        assert_eq!(reopened.tasks()[0].id, "docs");
+        assert_eq!(reopened.tasks()[0].status, TaskStatus::InProgress);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn plan_rechaza_ciclos_y_dependencias_inexistentes() {
         let goal = GoalState::new();
         goal.start("objetivo con grafo").unwrap();
