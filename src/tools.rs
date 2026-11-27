@@ -1508,7 +1508,7 @@ struct GoalPlanTool {
 impl Tool for GoalPlanTool {
     fn name(&self) -> &str { "goal_task" }
     fn description(&self) -> &str {
-        "Gestiona el plan persistente del objetivo raíz. Usa action=add/update para definir tareas y dependencias; start para iniciar una tarea; complete para cerrarla con evidencia; list para consultar el plan. Solo el agente raíz puede usarlo."
+        "Gestiona el plan persistente del objetivo raíz. Usa action=add/update para definir tareas, dependencias y checks de aceptación permitidos; start para iniciar; complete para aportar evidencia; list para consultar. Después ejecuta goal_verify. Solo el agente raíz puede usarlo."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -1567,9 +1567,11 @@ impl Tool for GoalPlanTool {
                 if tasks.is_empty() { return Ok("El plan todavía no contiene tareas.".into()); }
                 let mut out = String::new();
                 for task in tasks {
-                    out.push_str(&format!("- {} [{:?}] {} · depende de: {} · evidencia: {}",
+                    out.push_str(&format!("- {} [{:?}] {} · depende de: {} · checks: {} · verificada: {} · evidencia: {}",
                         task.id, task.status, task.title,
                         if task.depends_on.is_empty() { "ninguna".to_string() } else { task.depends_on.join(", ") },
+                        if task.checks.is_empty() { "ninguno".to_string() } else { task.checks.join(", ") },
+                        task.verified,
                         task.evidence.unwrap_or_else(|| "pendiente".into())
                     ));
                     out.push('\n');
