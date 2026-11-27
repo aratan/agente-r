@@ -169,7 +169,9 @@ impl GoalState {
             Ok(text) => serde_json::from_str(&text)
                 .with_context(|| format!("estado de objetivo ilegible: {}", path.display()))?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Disk::default(),
-            Err(err) => return Err(err).with_context(|| format!("no se pudo leer {}", path.display())),
+            Err(err) => {
+                return Err(err).with_context(|| format!("no se pudo leer {}", path.display()));
+            }
         };
         Ok(Self {
             path: Some(path),
@@ -186,7 +188,9 @@ impl GoalState {
 
     #[cfg(test)]
     fn check_save_failpoint(&self, point: SaveFailpoint) -> Result<()> {
-        let mut failpoint = self.failpoint.lock()
+        let mut failpoint = self
+            .failpoint
+            .lock()
             .map_err(|_| anyhow::anyhow!("failpoint de test bloqueado"))?;
         if *failpoint == Some(point) {
             *failpoint = None;
@@ -196,7 +200,9 @@ impl GoalState {
     }
 
     fn save(&self, disk: &Disk) -> Result<()> {
-        let Some(path) = &self.path else { return Ok(()) };
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         std::fs::create_dir_all(parent)?;
         let tmp = path.with_extension("json.tmp");
@@ -217,8 +223,13 @@ impl GoalState {
     /// Recupera ciclos interrumpidos. Debe llamarse solo después de adquirir
     /// el bloqueo exclusivo del workspace para evitar escrituras concurrentes.
     pub fn recover_interrupted(&self) -> Result<usize> {
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let Some(record) = disk.active.as_mut() else { return Ok(0) };
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let Some(record) = disk.active.as_mut() else {
+            return Ok(0);
+        };
         let mut recovered = 0usize;
         for operation in &mut record.operations {
             if operation.status == OperationStatus::Started {
@@ -229,7 +240,10 @@ impl GoalState {
             }
         }
         if let Some(cycle) = record.active_cycle.take().and_then(|cycle_number| {
-            record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number)
+            record
+                .cycles
+                .iter_mut()
+                .find(|cycle| cycle.number == cycle_number)
         }) {
             cycle.interrupted = true;
             cycle.finished_at = Some(now());
@@ -246,9 +260,16 @@ impl GoalState {
     /// uno activo y conserva los objetivos ya completados.
     pub fn start(&self, goal: &str) -> Result<()> {
         let goal = goal.trim();
-        if goal.is_empty() { bail!("el objetivo no puede estar vacío"); }
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let existing = disk.active.as_ref()
+        if goal.is_empty() {
+            bail!("el objetivo no puede estar vacío");
+        }
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let existing = disk
+            .active
+            .as_ref()
             .map(|current| (current.goal.clone(), current.status, current.id.clone()));
         if let Some((current_goal, current_status, current_id)) = existing {
             if current_goal == goal {
@@ -265,7 +286,9 @@ impl GoalState {
                 }
             }
             if current_status == GoalStatus::Active || current_status == GoalStatus::Paused {
-                bail!("hay un objetivo activo o pausado ({current_id}): {current_goal}; reanúdalo o complétalo antes de iniciar otro");
+                bail!(
+                    "hay un objetivo activo o pausado ({current_id}): {current_goal}; reanúdalo o complétalo antes de iniciar otro"
+                );
             }
         }
         if let Some(completed) = disk.active.take() {
@@ -297,22 +320,50 @@ impl GoalState {
 
     /// Persiste el comienzo del ciclo antes de invocar el modelo.
     pub fn begin_cycle(&self) -> Result<u64> {
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        if record.status != GoalStatus::Active { bail!("el objetivo no está activo"); }
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        if record.status != GoalStatus::Active {
+            bail!("el objetivo no está activo");
+        }
         if let Some(previous) = record.active_cycle.take() {
-            if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == previous) {
+            if let Some(cycle) = record
+                .cycles
+                .iter_mut()
+                .find(|cycle| cycle.number == previous)
+            {
                 cycle.interrupted = true;
                 cycle.finished_at = Some(now());
             }
-            for operation in record.operations.iter_mut().filter(|op| op.cycle == previous && op.status == OperationStatus::Started) {
+            for operation in record
+                .operations
+                .iter_mut()
+                .filter(|op| op.cycle == previous && op.status == OperationStatus::Started)
+            {
                 operation.status = OperationStatus::Unknown;
                 operation.finished_at = Some(now());
-                operation.result_summary = Some("ciclo anterior sin cierre; resultado desconocido".into());
+                operation.result_summary =
+                    Some("ciclo anterior sin cierre; resultado desconocido".into());
             }
         }
-        let number = record.cycles.iter().map(|cycle| cycle.number).max().unwrap_or(0).saturating_add(1);
-        record.cycles.push(CycleRecord { number, started_at: now(), finished_at: None, interrupted: false });
+        let number = record
+            .cycles
+            .iter()
+            .map(|cycle| cycle.number)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        record.cycles.push(CycleRecord {
+            number,
+            started_at: now(),
+            finished_at: None,
+            interrupted: false,
+        });
         if record.cycles.len() > 200 {
             record.cycles.drain(..record.cycles.len() - 200);
         }
@@ -325,19 +376,37 @@ impl GoalState {
     /// Registra la intención antes de ejecutar una herramienta. Solo se conserva
     /// un fingerprint; los argumentos potencialmente sensibles nunca se guardan.
     pub fn begin_operation(&self, tool: &str, args: &serde_json::Value) -> Result<Option<String>> {
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        let Some(cycle) = record.active_cycle else { return Ok(None) };
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let Some(cycle) = record.active_cycle else {
+            return Ok(None);
+        };
         let canonical = serde_json::to_vec(args)?;
         let fingerprint = stable_fingerprint(&canonical);
         if record.operations.iter().any(|operation| {
             operation.tool == tool
                 && operation.args_fingerprint == fingerprint
-                && matches!(operation.status, OperationStatus::Unknown | OperationStatus::ResolvedApplied)
+                && matches!(
+                    operation.status,
+                    OperationStatus::Unknown | OperationStatus::ResolvedApplied
+                )
         }) {
-            bail!("operación bloqueada: existe una ejecución anterior con el mismo fingerprint y resultado desconocido; reconcilia el efecto externo antes de intentar repetirla");
+            bail!(
+                "operación bloqueada: existe una ejecución anterior con el mismo fingerprint y resultado desconocido; reconcilia el efecto externo antes de intentar repetirla"
+            );
         }
-        let sequence = record.operations.iter().filter(|op| op.cycle == cycle).count() + 1;
+        let sequence = record
+            .operations
+            .iter()
+            .filter(|op| op.cycle == cycle)
+            .count()
+            + 1;
         let id = format!("cycle-{cycle}-op-{sequence}");
         record.operations.push(OperationRecord {
             id: id.clone(),
@@ -359,14 +428,27 @@ impl GoalState {
 
     /// Guarda el resultado después de ejecutar la herramienta.
     pub fn finish_operation(&self, id: &str, succeeded: bool, result: &str) -> Result<()> {
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        let operation = record.operations.iter_mut().find(|op| op.id == id)
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let operation = record
+            .operations
+            .iter_mut()
+            .find(|op| op.id == id)
             .ok_or_else(|| anyhow::anyhow!("no existe la operación {id}"))?;
         if operation.status != OperationStatus::Started {
             bail!("la operación {id} ya no está en estado started");
         }
-        operation.status = if succeeded { OperationStatus::Succeeded } else { OperationStatus::Failed };
+        operation.status = if succeeded {
+            OperationStatus::Succeeded
+        } else {
+            OperationStatus::Failed
+        };
         operation.finished_at = Some(now());
         operation.result_summary = Some(truncate(result, 800));
         record.updated_at = now();
@@ -377,10 +459,21 @@ impl GoalState {
     /// desconocido. "applied" impide repetir; "not applied" permite reintentar.
     pub fn resolve_operation(&self, id: &str, applied: bool, evidence: &str) -> Result<()> {
         let evidence = evidence.trim();
-        if evidence.is_empty() { bail!("la evidencia de reconciliación es obligatoria"); }
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        let operation = record.operations.iter_mut().find(|operation| operation.id == id)
+        if evidence.is_empty() {
+            bail!("la evidencia de reconciliación es obligatoria");
+        }
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let operation = record
+            .operations
+            .iter_mut()
+            .find(|operation| operation.id == id)
             .ok_or_else(|| anyhow::anyhow!("no existe la operación {id}"))?;
         if operation.status != OperationStatus::Unknown {
             bail!("solo se pueden reconciliar operaciones con estado unknown");
@@ -391,24 +484,37 @@ impl GoalState {
             OperationStatus::ResolvedNotApplied
         };
         operation.finished_at = Some(now());
-        operation.result_summary = Some(truncate(&format!("reconciliación humana: {}", evidence), 800));
+        operation.result_summary = Some(truncate(
+            &format!("reconciliación humana: {}", evidence),
+            800,
+        ));
         record.updated_at = now();
         self.save(&disk)
     }
 
     /// Instrucciones explícitas para reanudar sin repetir efectos externos ambiguos.
     pub fn recovery_prompt(&self, limit: usize) -> String {
-        let operations = self.inner.lock().ok()
-            .and_then(|disk| disk.active.as_ref().map(|goal| {
-                goal.operations.iter().rev()
-                    .filter(|operation| operation.status == OperationStatus::Unknown)
-                    .take(limit)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })).unwrap_or_default();
-        if operations.is_empty() { return String::new(); }
+        let operations = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|disk| {
+                disk.active.as_ref().map(|goal| {
+                    goal.operations
+                        .iter()
+                        .rev()
+                        .filter(|operation| operation.status == OperationStatus::Unknown)
+                        .take(limit)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+        if operations.is_empty() {
+            return String::new();
+        }
         let mut out = String::from(
-            "RECUPERACIÓN DE OPERACIONES INTERRUMPIDAS: NO repitas ninguna operación UNKNOWN ni su efecto externo. Primero busca evidencia para reconciliar si se ejecutó. Si no puedes determinarlo, informa del bloqueo y pide intervención; una estrategia distinta debe producir una operación nueva y justificada.\n"
+            "RECUPERACIÓN DE OPERACIONES INTERRUMPIDAS: NO repitas ninguna operación UNKNOWN ni su efecto externo. Primero busca evidencia para reconciliar si se ejecutó. Si no puedes determinarlo, informa del bloqueo y pide intervención; una estrategia distinta debe producir una operación nueva y justificada.\n",
         );
         for operation in operations.iter().rev() {
             out.push_str(&format!(
@@ -421,13 +527,24 @@ impl GoalState {
 
     /// Añade el resultado de un ciclo. El resumen no se interpreta como éxito.
     pub fn record_attempt(&self, summary: &str) -> Result<u64> {
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        if record.status != GoalStatus::Active { bail!("el objetivo no está activo"); }
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        if record.status != GoalStatus::Active {
+            bail!("el objetivo no está activo");
+        }
         record.attempt_count += 1;
         let number = record.attempt_count;
         if let Some(cycle) = record.active_cycle.take().and_then(|cycle_number| {
-            record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number)
+            record
+                .cycles
+                .iter_mut()
+                .find(|cycle| cycle.number == cycle_number)
         }) {
             cycle.finished_at = Some(now());
         }
@@ -448,20 +565,38 @@ impl GoalState {
 
     /// Crea o actualiza una tarea del plan persistente. Las dependencias deben
     /// existir y el grafo debe permanecer acíclico.
-    pub fn upsert_task(&self, id: &str, title: &str, depends_on: &[String], checks: &[String]) -> Result<()> {
+    pub fn upsert_task(
+        &self,
+        id: &str,
+        title: &str,
+        depends_on: &[String],
+        checks: &[String],
+    ) -> Result<()> {
         let id = id.trim();
         let title = title.trim();
-        if id.is_empty() || title.is_empty() { bail!("id y title de tarea son obligatorios"); }
-        if depends_on.iter().any(|dep| dep == id) { bail!("una tarea no puede depender de sí misma"); }
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        if id.is_empty() || title.is_empty() {
+            bail!("id y title de tarea son obligatorios");
+        }
+        if depends_on.iter().any(|dep| dep == id) {
+            bail!("una tarea no puede depender de sí misma");
+        }
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let goal = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
         for dep in depends_on {
             if !goal.tasks.iter().any(|task| task.id == *dep) {
                 bail!("dependencia desconocida: {dep}");
             }
         }
         let existing = goal.tasks.iter().position(|task| task.id == id);
-        let status = existing.map(|i| goal.tasks[i].status.clone()).unwrap_or(TaskStatus::Pending);
+        let status = existing
+            .map(|i| goal.tasks[i].status.clone())
+            .unwrap_or(TaskStatus::Pending);
         let evidence = existing.and_then(|i| goal.tasks[i].evidence.clone());
         let verified = existing.is_some_and(|i| {
             let previous = &goal.tasks[i];
@@ -475,7 +610,12 @@ impl GoalState {
         } else {
             None
         };
-        if depends_on.iter().collect::<std::collections::HashSet<_>>().len() != depends_on.len() {
+        if depends_on
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != depends_on.len()
+        {
             bail!("dependencias duplicadas");
         }
         if existing.is_some_and(|i| {
@@ -485,12 +625,14 @@ impl GoalState {
                     || previous.depends_on != depends_on
                     || previous.checks != checks)
         }) {
-            bail!("no se puede modificar una tarea completada; reábrela primero si no tiene dependientes completados");
+            bail!(
+                "no se puede modificar una tarea completada; reábrela primero si no tiene dependientes completados"
+            );
         }
         if goal.tasks.iter().any(|task| {
-            task.status == TaskStatus::Completed
-                && task.depends_on.iter().any(|dep| dep == id)
-        }) && existing.is_some_and(|i| goal.tasks[i].depends_on != depends_on) {
+            task.status == TaskStatus::Completed && task.depends_on.iter().any(|dep| dep == id)
+        }) && existing.is_some_and(|i| goal.tasks[i].depends_on != depends_on)
+        {
             bail!("no se pueden cambiar dependencias de una tarea con dependientes completados");
         }
         let task = GoalTask {
@@ -505,8 +647,14 @@ impl GoalState {
             updated_at: now(),
         };
         let mut proposed = goal.tasks.clone();
-        if let Some(index) = existing { proposed[index] = task; } else { proposed.push(task); }
-        if has_dependency_cycle(&proposed) { bail!("dependencias circulares: operación rechazada"); }
+        if let Some(index) = existing {
+            proposed[index] = task;
+        } else {
+            proposed.push(task);
+        }
+        if has_dependency_cycle(&proposed) {
+            bail!("dependencias circulares: operación rechazada");
+        }
         goal.tasks = proposed;
         goal.updated_at = now();
         self.save(&disk)?;
@@ -515,23 +663,41 @@ impl GoalState {
 
     /// Cambia estado de tarea. Una tarea solo puede empezar si sus dependencias
     /// están completadas; completar requiere evidencia no vacía.
-    pub fn set_task_status(&self, id: &str, status: TaskStatus, evidence: Option<&str>) -> Result<()> {
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        let index = goal.tasks.iter().position(|task| task.id == id)
+    pub fn set_task_status(
+        &self,
+        id: &str,
+        status: TaskStatus,
+        evidence: Option<&str>,
+    ) -> Result<()> {
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let goal = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let index = goal
+            .tasks
+            .iter()
+            .position(|task| task.id == id)
             .ok_or_else(|| anyhow::anyhow!("no existe la tarea {id}"))?;
         if status != TaskStatus::Completed
             && goal.tasks.iter().any(|task| {
-                task.status == TaskStatus::Completed
-                    && task.depends_on.iter().any(|dep| dep == id)
+                task.status == TaskStatus::Completed && task.depends_on.iter().any(|dep| dep == id)
             })
         {
             bail!("no se puede reabrir una tarea con dependientes ya completados");
         }
         if status != TaskStatus::Pending {
             for dep in &goal.tasks[index].depends_on {
-                let ready = goal.tasks.iter().any(|task| task.id == *dep && task.status == TaskStatus::Completed);
-                if !ready { bail!("dependencia pendiente: {dep}"); }
+                let ready = goal
+                    .tasks
+                    .iter()
+                    .any(|task| task.id == *dep && task.status == TaskStatus::Completed);
+                if !ready {
+                    bail!("dependencia pendiente: {dep}");
+                }
             }
         }
         if status == TaskStatus::Completed && evidence.map(str::trim).unwrap_or("").is_empty() {
@@ -539,7 +705,10 @@ impl GoalState {
         }
         let task = &mut goal.tasks[index];
         task.status = status;
-        task.evidence = evidence.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        task.evidence = evidence
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         task.verified = false;
         task.verification_output = None;
         task.updated_at = now();
@@ -564,13 +733,22 @@ impl GoalState {
         if fingerprint.is_empty() || strategy.is_empty() {
             bail!("fingerprint y strategy son obligatorios");
         }
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        let repeated = goal.failures.iter().any(|failure| {
-            failure.fingerprint == fingerprint && failure.strategy == strategy
-        });
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let goal = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let repeated = goal
+            .failures
+            .iter()
+            .any(|failure| failure.fingerprint == fingerprint && failure.strategy == strategy);
         if repeated && !condition_changed {
-            bail!("reintento bloqueado: esta estrategia ya falló para el mismo síntoma; cambia la estrategia o documenta un cambio de condiciones");
+            bail!(
+                "reintento bloqueado: esta estrategia ya falló para el mismo síntoma; cambia la estrategia o documenta un cambio de condiciones"
+            );
         }
         goal.failures.push(FailureRecord {
             fingerprint: truncate(fingerprint, 160),
@@ -589,12 +767,27 @@ impl GoalState {
     }
 
     pub fn failure_prompt(&self, limit: usize) -> String {
-        let failures = self.inner.lock().ok()
-            .and_then(|disk| disk.active.as_ref().map(|goal| {
-                goal.failures.iter().rev().take(limit).cloned().collect::<Vec<_>>()
-            })).unwrap_or_default();
-        if failures.is_empty() { return String::new(); }
-        let mut out = String::from("DIARIO DE FALLOS (no repitas la misma estrategia sin cambiar condiciones):");
+        let failures = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|disk| {
+                disk.active.as_ref().map(|goal| {
+                    goal.failures
+                        .iter()
+                        .rev()
+                        .take(limit)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+        if failures.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from(
+            "DIARIO DE FALLOS (no repitas la misma estrategia sin cambiar condiciones):",
+        );
         out.push('\n');
         for failure in failures.iter().rev() {
             out.push_str(&format!("- [{}] {} | síntoma: {} | estrategia fallida: {} | cambio de condiciones declarado: {}",
@@ -608,9 +801,18 @@ impl GoalState {
 
     /// Registra el resultado del evaluador determinista de comandos de aceptación.
     pub fn set_task_verification(&self, id: &str, passed: bool, output: &str) -> Result<()> {
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let goal = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        let task = goal.tasks.iter_mut().find(|task| task.id == id)
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let goal = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let task = goal
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == id)
             .ok_or_else(|| anyhow::anyhow!("no existe la tarea {id}"))?;
         if task.status != TaskStatus::Completed {
             bail!("la tarea debe estar completada antes de evaluarla");
@@ -624,7 +826,9 @@ impl GoalState {
     }
 
     pub fn tasks(&self) -> Vec<GoalTask> {
-        self.inner.lock().ok()
+        self.inner
+            .lock()
+            .ok()
             .and_then(|disk| disk.active.as_ref().map(|goal| goal.tasks.clone()))
             .unwrap_or_default()
     }
@@ -634,23 +838,47 @@ impl GoalState {
         if tasks.is_empty() {
             return "PLAN: todavía no hay tareas persistentes. Descompón el objetivo en entregables verificables con goal_task antes de ejecutar cambios grandes.\n".to_string();
         }
-        let mut out = String::from("PLAN PERSISTENTE (respeta dependencias; trabaja primero en tareas listas):\n");
+        let mut out = String::from(
+            "PLAN PERSISTENTE (respeta dependencias; trabaja primero en tareas listas):\n",
+        );
         for task in tasks {
-            out.push_str(&format!("- [{}{}] {} — {}{} | checks: {}\n",
-                match task.status { TaskStatus::Pending => "pendiente", TaskStatus::InProgress => "en curso", TaskStatus::Completed => "completada" },
+            out.push_str(&format!(
+                "- [{}{}] {} — {}{} | checks: {}\n",
+                match task.status {
+                    TaskStatus::Pending => "pendiente",
+                    TaskStatus::InProgress => "en curso",
+                    TaskStatus::Completed => "completada",
+                },
                 if task.verified { " · verificada" } else { "" },
-                task.id, task.title,
-                if task.depends_on.is_empty() { String::new() } else { format!(" (depende de: {})", task.depends_on.join(", ")) },
-                if task.checks.is_empty() { "sin definir".to_string() } else { task.checks.join(", ") }
+                task.id,
+                task.title,
+                if task.depends_on.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (depende de: {})", task.depends_on.join(", "))
+                },
+                if task.checks.is_empty() {
+                    "sin definir".to_string()
+                } else {
+                    task.checks.join(", ")
+                }
             ));
         }
         out
     }
 
     pub fn pause(&self, reason: &str) -> Result<()> {
-        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
-        if record.status != GoalStatus::Active { bail!("solo se puede pausar un objetivo activo"); }
+        let mut disk = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk
+            .active
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        if record.status != GoalStatus::Active {
+            bail!("solo se puede pausar un objetivo activo");
+        }
         record.status = GoalStatus::Paused;
         record.pause_reason = Some(truncate(reason.trim(), 800));
         record.updated_at = now();
@@ -659,41 +887,74 @@ impl GoalState {
 
     /// Presupuesto persistente de ciclos. El contador total nunca se reinicia al reanudar.
     pub fn budget_limit(&self, max_per_hour: usize, max_total: u64) -> Option<String> {
-        self.inner.lock().ok().and_then(|disk| disk.active.as_ref().and_then(|goal| {
-            if goal.attempt_count >= max_total {
-                return Some(format!("límite total de ciclos alcanzado ({max_total})"));
-            }
-            let cutoff = now().saturating_sub(3600);
-            let recent = goal.attempts.iter().filter(|attempt| attempt.at >= cutoff).count();
-            if recent >= max_per_hour {
-                return Some(format!("límite horario alcanzado ({max_per_hour} ciclos/hora)"));
-            }
-            None
-        }))
+        self.inner.lock().ok().and_then(|disk| {
+            disk.active.as_ref().and_then(|goal| {
+                if goal.attempt_count >= max_total {
+                    return Some(format!("límite total de ciclos alcanzado ({max_total})"));
+                }
+                let cutoff = now().saturating_sub(3600);
+                let recent = goal
+                    .attempts
+                    .iter()
+                    .filter(|attempt| attempt.at >= cutoff)
+                    .count();
+                if recent >= max_per_hour {
+                    return Some(format!(
+                        "límite horario alcanzado ({max_per_hour} ciclos/hora)"
+                    ));
+                }
+                None
+            })
+        })
     }
 
     /// Detecta respuestas idénticas consecutivas, señal determinista de estancamiento.
     pub fn repeated_attempts(&self, limit: usize) -> bool {
-        if limit < 2 { return false; }
-        self.inner.lock().ok().and_then(|disk| disk.active.as_ref().map(|goal| {
-            if goal.attempts.len() < limit { return false; }
-            let tail = &goal.attempts[goal.attempts.len() - limit..];
-            let first = tail[0].summary.trim();
-            !first.is_empty() && tail.iter().all(|attempt| attempt.summary.trim() == first)
-        })).unwrap_or(false)
+        if limit < 2 {
+            return false;
+        }
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|disk| {
+                disk.active.as_ref().map(|goal| {
+                    if goal.attempts.len() < limit {
+                        return false;
+                    }
+                    let tail = &goal.attempts[goal.attempts.len() - limit..];
+                    let first = tail[0].summary.trim();
+                    !first.is_empty() && tail.iter().all(|attempt| attempt.summary.trim() == first)
+                })
+            })
+            .unwrap_or(false)
     }
 
     pub fn attempts(&self) -> u64 {
-        self.inner.lock().ok()
+        self.inner
+            .lock()
+            .ok()
             .and_then(|d| d.active.as_ref().map(|g| g.attempt_count))
             .unwrap_or(0)
     }
 
     pub fn previous_summaries(&self, limit: usize) -> Vec<String> {
-        self.inner.lock().ok().and_then(|d| d.active.as_ref().map(|g| {
-            g.attempts.iter().rev().take(limit).collect::<Vec<_>>()
-                .into_iter().rev().map(|a| a.summary.clone()).collect()
-        })).unwrap_or_default()
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|d| {
+                d.active.as_ref().map(|g| {
+                    g.attempts
+                        .iter()
+                        .rev()
+                        .take(limit)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .map(|a| a.summary.clone())
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
     }
 
     /// Marca la meta cumplida. La evidencia textual se conserva, pero no se
@@ -716,17 +977,25 @@ impl GoalState {
             if record.status == GoalStatus::Paused {
                 return "Rechazado: el objetivo está pausado por el governor; reanúdalo explícitamente antes de cerrarlo.".to_string();
             }
-            let unfinished = record.tasks.iter()
+            let unfinished = record
+                .tasks
+                .iter()
                 .filter(|task| task.status != TaskStatus::Completed || !task.verified)
                 .map(|task| task.id.clone())
                 .collect::<Vec<_>>();
             if !unfinished.is_empty() {
-                return format!("Rechazado: quedan tareas sin completar: {}", unfinished.join(", "));
+                return format!(
+                    "Rechazado: quedan tareas sin completar: {}",
+                    unfinished.join(", ")
+                );
             }
             record.evidence = Some(evidence.to_string());
             record.status = GoalStatus::Completed;
             if let Some(cycle) = record.active_cycle.take().and_then(|cycle_number| {
-                record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number)
+                record
+                    .cycles
+                    .iter_mut()
+                    .find(|cycle| cycle.number == cycle_number)
             }) {
                 cycle.finished_at = Some(now());
             }
@@ -745,17 +1014,23 @@ impl GoalState {
     }
 
     pub fn is_done(&self) -> bool {
-        self.inner.lock().ok().and_then(|d| d.active.as_ref().map(|g| g.status == GoalStatus::Completed)).unwrap_or(false)
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|d| d.active.as_ref().map(|g| g.status == GoalStatus::Completed))
+            .unwrap_or(false)
     }
 
     pub fn evidence(&self) -> Option<String> {
-        self.inner.lock().ok().and_then(|d| d.active.as_ref().and_then(|g| g.evidence.clone()))
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|d| d.active.as_ref().and_then(|g| g.evidence.clone()))
     }
 
     pub fn active(&self) -> Option<GoalRecord> {
         self.inner.lock().ok().and_then(|d| d.active.clone())
     }
-
 }
 
 pub fn state_path(root: &Path) -> PathBuf {
@@ -763,13 +1038,24 @@ pub fn state_path(root: &Path) -> PathBuf {
 }
 
 fn has_dependency_cycle(tasks: &[GoalTask]) -> bool {
-    fn visit(id: &str, tasks: &[GoalTask], visiting: &mut Vec<String>, visited: &mut Vec<String>) -> bool {
-        if visiting.iter().any(|item| item == id) { return true; }
-        if visited.iter().any(|item| item == id) { return false; }
+    fn visit(
+        id: &str,
+        tasks: &[GoalTask],
+        visiting: &mut Vec<String>,
+        visited: &mut Vec<String>,
+    ) -> bool {
+        if visiting.iter().any(|item| item == id) {
+            return true;
+        }
+        if visited.iter().any(|item| item == id) {
+            return false;
+        }
         visiting.push(id.to_string());
         if let Some(task) = tasks.iter().find(|task| task.id == id) {
             for dep in &task.depends_on {
-                if visit(dep, tasks, visiting, visited) { return true; }
+                if visit(dep, tasks, visiting, visited) {
+                    return true;
+                }
             }
         }
         visiting.pop();
@@ -778,7 +1064,9 @@ fn has_dependency_cycle(tasks: &[GoalTask]) -> bool {
     }
     let mut visiting = Vec::new();
     let mut visited = Vec::new();
-    tasks.iter().any(|task| visit(&task.id, tasks, &mut visiting, &mut visited))
+    tasks
+        .iter()
+        .any(|task| visit(&task.id, tasks, &mut visiting, &mut visited))
 }
 
 fn stable_fingerprint(bytes: &[u8]) -> String {
@@ -792,7 +1080,10 @@ fn stable_fingerprint(bytes: &[u8]) -> String {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn goal_id(goal: &str, timestamp: u64) -> String {
@@ -806,7 +1097,9 @@ fn goal_id(goal: &str, timestamp: u64) -> String {
 }
 
 fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max { return text.to_string(); }
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
     let mut out: String = text.chars().take(max).collect();
     out.push('…');
     out
@@ -869,7 +1162,10 @@ mod tests {
     fn pausa_por_estancamiento_y_reanudacion_explicita() {
         let goal = GoalState::new();
         goal.start("misión persistente").unwrap();
-        for _ in 0..3 { goal.record_attempt("sin cambios; no se pudo avanzar").unwrap(); }
+        for _ in 0..3 {
+            goal.record_attempt("sin cambios; no se pudo avanzar")
+                .unwrap();
+        }
         assert!(goal.repeated_attempts(3));
         goal.pause("tres ciclos idénticos").unwrap();
         assert_eq!(goal.active().unwrap().status, GoalStatus::Paused);
@@ -884,10 +1180,44 @@ mod tests {
     fn diario_causal_bloquea_repeticion_sin_cambio_de_condiciones() {
         let goal = GoalState::new();
         goal.start("corregir fallo recurrente").unwrap();
-        goal.record_failure("cargo-test-17", "test", "assertion failed", "cambiar el timeout", false).unwrap();
-        assert!(goal.record_failure("cargo-test-17", "test", "assertion failed", "cambiar el timeout", false).is_err());
-        assert!(goal.record_failure("cargo-test-17", "test", "assertion failed", "aislar la carrera", false).is_ok());
-        assert!(goal.record_failure("cargo-test-17", "test", "assertion failed", "cambiar el timeout", true).is_ok());
+        goal.record_failure(
+            "cargo-test-17",
+            "test",
+            "assertion failed",
+            "cambiar el timeout",
+            false,
+        )
+        .unwrap();
+        assert!(
+            goal.record_failure(
+                "cargo-test-17",
+                "test",
+                "assertion failed",
+                "cambiar el timeout",
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            goal.record_failure(
+                "cargo-test-17",
+                "test",
+                "assertion failed",
+                "aislar la carrera",
+                false
+            )
+            .is_ok()
+        );
+        assert!(
+            goal.record_failure(
+                "cargo-test-17",
+                "test",
+                "assertion failed",
+                "cambiar el timeout",
+                true
+            )
+            .is_ok()
+        );
         assert!(goal.failure_prompt(8).contains("aislar la carrera"));
     }
 
@@ -895,12 +1225,20 @@ mod tests {
     fn cambiar_checks_invalida_verificacion_anterior() {
         let goal = GoalState::new();
         goal.start("checks versionados").unwrap();
-        goal.upsert_task("test", "tests", &[], &["cargo test".into()]).unwrap();
-        goal.set_task_status("test", TaskStatus::Completed, Some("tests ejecutados")).unwrap();
-        goal.set_task_verification("test", true, "cargo test: ok").unwrap();
-        assert!(goal.upsert_task("test", "tests", &[], &["cargo check".into()]).is_err());
-        goal.set_task_status("test", TaskStatus::Pending, None).unwrap();
-        goal.upsert_task("test", "tests", &[], &["cargo check".into()]).unwrap();
+        goal.upsert_task("test", "tests", &[], &["cargo test".into()])
+            .unwrap();
+        goal.set_task_status("test", TaskStatus::Completed, Some("tests ejecutados"))
+            .unwrap();
+        goal.set_task_verification("test", true, "cargo test: ok")
+            .unwrap();
+        assert!(
+            goal.upsert_task("test", "tests", &[], &["cargo check".into()])
+                .is_err()
+        );
+        goal.set_task_status("test", TaskStatus::Pending, None)
+            .unwrap();
+        goal.upsert_task("test", "tests", &[], &["cargo check".into()])
+            .unwrap();
         assert!(!goal.tasks()[0].verified);
     }
 
@@ -908,15 +1246,28 @@ mod tests {
     fn plan_persistente_valida_dependencias_y_evidencias() {
         let goal = GoalState::new();
         goal.start("objetivo con plan").unwrap();
-        goal.upsert_task("a", "preparar base", &[], &["cargo test".into()]).unwrap();
-        goal.upsert_task("b", "validar base", &["a".into()], &["cargo clippy".into()]).unwrap();
-        assert!(goal.set_task_status("b", TaskStatus::InProgress, None).is_err());
-        goal.set_task_status("a", TaskStatus::Completed, Some("tests verdes")).unwrap();
-        goal.set_task_status("b", TaskStatus::InProgress, None).unwrap();
-        assert!(goal.set_task_status("b", TaskStatus::Completed, None).is_err());
-        goal.set_task_status("b", TaskStatus::Completed, Some("auditoría pasada")).unwrap();
-        goal.set_task_verification("a", true, "cargo test: ok").unwrap();
-        goal.set_task_verification("b", true, "cargo clippy: ok").unwrap();
+        goal.upsert_task("a", "preparar base", &[], &["cargo test".into()])
+            .unwrap();
+        goal.upsert_task("b", "validar base", &["a".into()], &["cargo clippy".into()])
+            .unwrap();
+        assert!(
+            goal.set_task_status("b", TaskStatus::InProgress, None)
+                .is_err()
+        );
+        goal.set_task_status("a", TaskStatus::Completed, Some("tests verdes"))
+            .unwrap();
+        goal.set_task_status("b", TaskStatus::InProgress, None)
+            .unwrap();
+        assert!(
+            goal.set_task_status("b", TaskStatus::Completed, None)
+                .is_err()
+        );
+        goal.set_task_status("b", TaskStatus::Completed, Some("auditoría pasada"))
+            .unwrap();
+        goal.set_task_verification("a", true, "cargo test: ok")
+            .unwrap();
+        goal.set_task_verification("b", true, "cargo clippy: ok")
+            .unwrap();
         assert_eq!(goal.tasks().len(), 2);
     }
 
@@ -927,8 +1278,10 @@ mod tests {
         let path = dir.join("goal.json");
         let goal = GoalState::open(path.clone()).unwrap();
         goal.start("objetivo durable").unwrap();
-        goal.upsert_task("docs", "documentar", &[], &["git diff --check".into()]).unwrap();
-        goal.set_task_status("docs", TaskStatus::InProgress, None).unwrap();
+        goal.upsert_task("docs", "documentar", &[], &["git diff --check".into()])
+            .unwrap();
+        goal.set_task_status("docs", TaskStatus::InProgress, None)
+            .unwrap();
         drop(goal);
         let reopened = GoalState::open(path).unwrap();
         assert_eq!(reopened.tasks()[0].id, "docs");
@@ -940,8 +1293,12 @@ mod tests {
     fn plan_rechaza_ciclos_y_dependencias_inexistentes() {
         let goal = GoalState::new();
         goal.start("objetivo con grafo").unwrap();
-        goal.upsert_task("a", "A", &[], &["cargo test".into()]).unwrap();
-        assert!(goal.upsert_task("b", "B", &["missing".into()], &[]).is_err());
+        goal.upsert_task("a", "A", &[], &["cargo test".into()])
+            .unwrap();
+        assert!(
+            goal.upsert_task("b", "B", &["missing".into()], &[])
+                .is_err()
+        );
         goal.upsert_task("b", "B", &["a".into()], &[]).unwrap();
         assert!(goal.upsert_task("a", "A", &["b".into()], &[]).is_err());
     }
@@ -956,17 +1313,25 @@ mod tests {
         assert!(!goal.is_done());
         assert!(goal.ack("   ").starts_with("Rechazado"));
         assert!(!goal.is_done());
-        goal.record_attempt("cargo test falló por dependencia").unwrap();
+        goal.record_attempt("cargo test falló por dependencia")
+            .unwrap();
 
         let reopened = GoalState::open(path.clone()).unwrap();
         assert_eq!(reopened.attempts(), 1);
         assert_eq!(reopened.active().unwrap().goal, "dejar CI en verde");
         assert!(reopened.start("otro objetivo").is_err());
-        assert!(reopened.ack("cargo test: 38/38; CI verde").contains("cumplida"));
+        assert!(
+            reopened
+                .ack("cargo test: 38/38; CI verde")
+                .contains("cumplida")
+        );
 
         let final_state = GoalState::open(path).unwrap();
         assert!(final_state.is_done());
-        assert_eq!(final_state.evidence().as_deref(), Some("cargo test: 38/38; CI verde"));
+        assert_eq!(
+            final_state.evidence().as_deref(),
+            Some("cargo test: 38/38; CI verde")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -974,13 +1339,22 @@ mod tests {
     fn no_permite_reabrir_dependencia_de_tarea_completada() {
         let goal = GoalState::new();
         goal.start("dependencias estables").unwrap();
-        goal.upsert_task("a", "base", &[], &["cargo test".into()]).unwrap();
-        goal.upsert_task("b", "integración", &["a".into()], &["cargo clippy".into()]).unwrap();
-        goal.set_task_status("a", TaskStatus::Completed, Some("base verificada")).unwrap();
-        goal.set_task_verification("a", true, "cargo test: ok").unwrap();
-        goal.set_task_status("b", TaskStatus::Completed, Some("integración verificada")).unwrap();
-        goal.set_task_verification("b", true, "cargo clippy: ok").unwrap();
-        assert!(goal.set_task_status("a", TaskStatus::Pending, None).is_err());
+        goal.upsert_task("a", "base", &[], &["cargo test".into()])
+            .unwrap();
+        goal.upsert_task("b", "integración", &["a".into()], &["cargo clippy".into()])
+            .unwrap();
+        goal.set_task_status("a", TaskStatus::Completed, Some("base verificada"))
+            .unwrap();
+        goal.set_task_verification("a", true, "cargo test: ok")
+            .unwrap();
+        goal.set_task_status("b", TaskStatus::Completed, Some("integración verificada"))
+            .unwrap();
+        goal.set_task_verification("b", true, "cargo clippy: ok")
+            .unwrap();
+        assert!(
+            goal.set_task_status("a", TaskStatus::Pending, None)
+                .is_err()
+        );
         assert!(goal.upsert_task("a", "base", &["b".into()], &[]).is_err());
     }
 
@@ -988,13 +1362,25 @@ mod tests {
     fn no_permite_cerrar_objetivo_con_tareas_pendientes() {
         let goal = GoalState::new();
         goal.start("objetivo dividido en tareas").unwrap();
-        goal.upsert_task("compile", "compilar", &[], &["cargo test".into()]).unwrap();
-        assert!(goal.ack("el agente afirma que terminó").starts_with("Rechazado"));
+        goal.upsert_task("compile", "compilar", &[], &["cargo test".into()])
+            .unwrap();
+        assert!(
+            goal.ack("el agente afirma que terminó")
+                .starts_with("Rechazado")
+        );
         assert!(!goal.is_done());
-        goal.set_task_status("compile", TaskStatus::Completed, Some("cargo test: ok")).unwrap();
-        assert!(goal.ack("el agente afirma que pasó").starts_with("Rechazado"));
-        goal.set_task_verification("compile", true, "cargo test: ok").unwrap();
-        assert!(goal.ack("tests ejecutados y resultado comprobado").contains("cumplida"));
+        goal.set_task_status("compile", TaskStatus::Completed, Some("cargo test: ok"))
+            .unwrap();
+        assert!(
+            goal.ack("el agente afirma que pasó")
+                .starts_with("Rechazado")
+        );
+        goal.set_task_verification("compile", true, "cargo test: ok")
+            .unwrap();
+        assert!(
+            goal.ack("tests ejecutados y resultado comprobado")
+                .contains("cumplida")
+        );
         assert!(goal.is_done());
     }
 
@@ -1017,7 +1403,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("goal.json");
-        std::fs::write(&path, r#"{
+        std::fs::write(
+            &path,
+            r#"{
             "active": {
                 "id": "legacy",
                 "goal": "objetivo anterior",
@@ -1030,7 +1418,9 @@ mod tests {
                 "failures": []
             },
             "completed": []
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let goal = GoalState::open(path).unwrap();
         let record = goal.active().unwrap();
         assert!(record.cycles.is_empty());
@@ -1048,30 +1438,58 @@ mod tests {
         let goal = GoalState::open(path.clone()).unwrap();
         goal.start("recuperar operación").unwrap();
         let first_cycle = goal.begin_cycle().unwrap();
-        let operation = goal.begin_operation("send_email", &serde_json::json!({
-            "to": "private@example.test",
-            "body": "contenido sensible"
-        })).unwrap().unwrap();
+        let operation = goal
+            .begin_operation(
+                "send_email",
+                &serde_json::json!({
+                    "to": "private@example.test",
+                    "body": "contenido sensible"
+                }),
+            )
+            .unwrap()
+            .unwrap();
         drop(goal);
 
         let recovered = GoalState::open(path.clone()).unwrap();
         assert_eq!(recovered.recover_interrupted().unwrap(), 2);
         let record = recovered.active().unwrap();
         assert_eq!(record.operations[0].status, OperationStatus::Unknown);
-        assert!(!record.operations[0].result_summary.as_deref().unwrap().contains("private@example.test"));
-        assert!(record.cycles.iter().any(|cycle| cycle.number == first_cycle && cycle.interrupted));
+        assert!(
+            !record.operations[0]
+                .result_summary
+                .as_deref()
+                .unwrap()
+                .contains("private@example.test")
+        );
+        assert!(
+            record
+                .cycles
+                .iter()
+                .any(|cycle| cycle.number == first_cycle && cycle.interrupted)
+        );
         assert!(record.active_cycle.is_none());
 
         let second_cycle = recovered.begin_cycle().unwrap();
-        assert!(second_cycle > first_cycle, "los ciclos no deben reutilizar IDs tras un crash");
         assert!(
-            recovered.begin_operation("send_email", &serde_json::json!({
-                "to": "private@example.test",
-                "body": "contenido sensible"
-            })).is_err(),
+            second_cycle > first_cycle,
+            "los ciclos no deben reutilizar IDs tras un crash"
+        );
+        assert!(
+            recovered
+                .begin_operation(
+                    "send_email",
+                    &serde_json::json!({
+                        "to": "private@example.test",
+                        "body": "contenido sensible"
+                    })
+                )
+                .is_err(),
             "un efecto externo de resultado desconocido no debe repetirse con los mismos argumentos"
         );
-        let next = recovered.begin_operation("send_email", &serde_json::json!({"to":"other"})).unwrap().unwrap();
+        let next = recovered
+            .begin_operation("send_email", &serde_json::json!({"to":"other"}))
+            .unwrap()
+            .unwrap();
         assert_ne!(next, operation);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1084,18 +1502,44 @@ mod tests {
         let goal = GoalState::open(path.clone()).unwrap();
         goal.start("reconciliar operaciones").unwrap();
         goal.begin_cycle().unwrap();
-        let applied = goal.begin_operation("send", &serde_json::json!({"id":1})).unwrap().unwrap();
-        let not_applied = goal.begin_operation("send", &serde_json::json!({"id":2})).unwrap().unwrap();
+        let applied = goal
+            .begin_operation("send", &serde_json::json!({"id":1}))
+            .unwrap()
+            .unwrap();
+        let not_applied = goal
+            .begin_operation("send", &serde_json::json!({"id":2}))
+            .unwrap()
+            .unwrap();
         drop(goal);
 
         let recovered = GoalState::open(path).unwrap();
         recovered.recover_interrupted().unwrap();
-        recovered.resolve_operation(&applied, true, "el proveedor confirma el envío").unwrap();
-        recovered.resolve_operation(&not_applied, false, "el proveedor confirma que no recibió la petición").unwrap();
+        recovered
+            .resolve_operation(&applied, true, "el proveedor confirma el envío")
+            .unwrap();
+        recovered
+            .resolve_operation(
+                &not_applied,
+                false,
+                "el proveedor confirma que no recibió la petición",
+            )
+            .unwrap();
         recovered.begin_cycle().unwrap();
-        assert!(recovered.begin_operation("send", &serde_json::json!({"id":1})).is_err());
-        assert!(recovered.begin_operation("send", &serde_json::json!({"id":2})).is_ok());
-        assert!(recovered.resolve_operation(&applied, true, "duplicado").is_err());
+        assert!(
+            recovered
+                .begin_operation("send", &serde_json::json!({"id":1}))
+                .is_err()
+        );
+        assert!(
+            recovered
+                .begin_operation("send", &serde_json::json!({"id":2}))
+                .is_ok()
+        );
+        assert!(
+            recovered
+                .resolve_operation(&applied, true, "duplicado")
+                .is_err()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1107,7 +1551,13 @@ mod tests {
         let goal = GoalState::open(path.clone()).unwrap();
         goal.start("ejecutar herramienta").unwrap();
         goal.begin_cycle().unwrap();
-        let id = goal.begin_operation("fs_write", &serde_json::json!({"path":"x","content":"secret"})).unwrap().unwrap();
+        let id = goal
+            .begin_operation(
+                "fs_write",
+                &serde_json::json!({"path":"x","content":"secret"}),
+            )
+            .unwrap()
+            .unwrap();
         goal.finish_operation(&id, true, "archivo escrito").unwrap();
         drop(goal);
         let reopened = GoalState::open(path).unwrap();
@@ -1121,7 +1571,8 @@ mod tests {
 
     #[test]
     fn fallo_antes_de_rename_no_publica_un_checkpoint_incompleto() {
-        let dir = std::env::temp_dir().join(format!("agent-save-fail-before-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("agent-save-fail-before-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("goal.json");
         let goal = GoalState::open(path.clone()).unwrap();
@@ -1139,44 +1590,72 @@ mod tests {
 
     #[test]
     fn fallo_al_guardar_resultado_de_efecto_externo_se_recupera_como_unknown() {
-        let dir = std::env::temp_dir().join(format!("agent-save-fail-result-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("agent-save-fail-result-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("goal.json");
         let goal = GoalState::open(path.clone()).unwrap();
         goal.start("resultado externo ambiguo").unwrap();
         goal.begin_cycle().unwrap();
-        let id = goal.begin_operation("send", &serde_json::json!({"id": 7})).unwrap().unwrap();
+        let id = goal
+            .begin_operation("send", &serde_json::json!({"id": 7}))
+            .unwrap()
+            .unwrap();
 
         // Simula que el efecto externo ocurrió, pero el checkpoint final no llegó al rename.
         goal.fail_next_save_at(SaveFailpoint::AfterTempSyncBeforeRename);
-        assert!(goal.finish_operation(&id, true, "efecto ejecutado").is_err());
+        assert!(
+            goal.finish_operation(&id, true, "efecto ejecutado")
+                .is_err()
+        );
         drop(goal);
 
         let recovered = GoalState::open(path).unwrap();
         assert_eq!(recovered.recover_interrupted().unwrap(), 2);
-        assert_eq!(recovered.active().unwrap().operations[0].status, OperationStatus::Unknown);
+        assert_eq!(
+            recovered.active().unwrap().operations[0].status,
+            OperationStatus::Unknown
+        );
         assert!(recovered.begin_cycle().unwrap() > 1);
-        assert!(recovered.begin_operation("send", &serde_json::json!({"id": 7})).is_err());
+        assert!(
+            recovered
+                .begin_operation("send", &serde_json::json!({"id": 7}))
+                .is_err()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn rename_completado_con_error_antes_de_sync_del_directorio_conserva_resultado() {
-        let dir = std::env::temp_dir().join(format!("agent-save-fail-after-rename-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "agent-save-fail-after-rename-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("goal.json");
         let goal = GoalState::open(path.clone()).unwrap();
         goal.start("resultado tras rename").unwrap();
         goal.begin_cycle().unwrap();
-        let id = goal.begin_operation("write", &serde_json::json!({"path": "x"})).unwrap().unwrap();
+        let id = goal
+            .begin_operation("write", &serde_json::json!({"path": "x"}))
+            .unwrap()
+            .unwrap();
 
         goal.fail_next_save_at(SaveFailpoint::AfterRenameBeforeDirectorySync);
         assert!(goal.finish_operation(&id, true, "escrito").is_err());
         drop(goal);
 
         let reopened = GoalState::open(path).unwrap();
-        assert_eq!(reopened.active().unwrap().operations[0].status, OperationStatus::Succeeded);
-        assert_eq!(reopened.active().unwrap().operations[0].result_summary.as_deref(), Some("escrito"));
+        assert_eq!(
+            reopened.active().unwrap().operations[0].status,
+            OperationStatus::Succeeded
+        );
+        assert_eq!(
+            reopened.active().unwrap().operations[0]
+                .result_summary
+                .as_deref(),
+            Some("escrito")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

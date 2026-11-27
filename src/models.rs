@@ -27,7 +27,11 @@ pub struct Model {
 
 impl Model {
     fn params_or_default(&self) -> f64 {
-        if self.params_b > 0.0 { self.params_b } else { 7.0 }
+        if self.params_b > 0.0 {
+            self.params_b
+        } else {
+            7.0
+        }
     }
 
     pub fn is_embedding(&self) -> bool {
@@ -346,7 +350,10 @@ pub fn pull_ollama(url: &str, model: &str) -> Result<String> {
     let status = res.status().as_u16();
     let text = res.body_mut().read_to_string().unwrap_or_default();
     if !(200..300).contains(&status) {
-        bail!("{url} respondió HTTP {status}: {}", text.chars().take(300).collect::<String>());
+        bail!(
+            "{url} respondió HTTP {status}: {}",
+            text.chars().take(300).collect::<String>()
+        );
     }
     Ok(format!("descargado '{model}'"))
 }
@@ -399,7 +406,10 @@ mod tests {
 
     #[test]
     fn ignora_modelos_de_embeddings() {
-        let models = vec![model("nomic-embed-text:latest", 0.137), model("qwen3.5:9b", 9.0)];
+        let models = vec![
+            model("nomic-embed-text:latest", 0.137),
+            model("qwen3.5:9b", 9.0),
+        ];
         let elegido = pick(&models, Role::Fast, &specs(20.0)).unwrap();
         assert_eq!(elegido, "qwen3.5:9b");
     }

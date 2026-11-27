@@ -186,7 +186,10 @@ pub fn search(
             Err(err) => problems.push(format!("{}: {err:#}", engine.as_str())),
         }
     }
-    bail!("ningún motor devolvió resultados ({})", problems.join(" | "))
+    bail!(
+        "ningún motor devolvió resultados ({})",
+        problems.join(" | ")
+    )
 }
 
 fn one_engine(

@@ -202,7 +202,10 @@ impl Orchestra {
         let role = Role::parse(role_name).unwrap_or(Role::Worker);
         let model = self.model_for(role);
         if model.is_empty() {
-            bail!("no hay modelos instalados en el backend {}", self.backend.label());
+            bail!(
+                "no hay modelos instalados en el backend {}",
+                self.backend.label()
+            );
         }
         let slots = self.slots_for(&model);
 
@@ -300,7 +303,10 @@ impl Orchestra {
         let input = if context.trim().is_empty() {
             goal.to_string()
         } else {
-            format!("Contexto del padre:\n{}\n\nObjetivo:\n{goal}", context.trim())
+            format!(
+                "Contexto del padre:\n{}\n\nObjetivo:\n{goal}",
+                context.trim()
+            )
         };
         agent.run(&input)
     }

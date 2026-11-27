@@ -136,14 +136,22 @@ impl Agent {
                 let out = match self.tools.run(&call.name, &call.args) {
                     Ok(text) => {
                         if let (Some(goal), Some(id)) = (&self.opts.goal, operation_id.as_deref()) {
-                            goal.finish_operation(id, true, "ejecución completada; salida no duplicada en el journal")?;
+                            goal.finish_operation(
+                                id,
+                                true,
+                                "ejecución completada; salida no duplicada en el journal",
+                            )?;
                         }
                         text
                     }
                     Err(err) => {
                         let message = format!("ERROR: {err:#}");
                         if let (Some(goal), Some(id)) = (&self.opts.goal, operation_id.as_deref()) {
-                            goal.finish_operation(id, false, "la herramienta devolvió error; consulta la traza del ciclo")?;
+                            goal.finish_operation(
+                                id,
+                                false,
+                                "la herramienta devolvió error; consulta la traza del ciclo",
+                            )?;
                         }
                         message
                     }
@@ -211,18 +219,30 @@ impl Agent {
         for cycle in 1..=max {
             if let Some(state) = &state {
                 let max_per_hour = std::env::var("AGENT_GOAL_MAX_CYCLES_PER_HOUR")
-                    .ok().and_then(|value| value.parse::<usize>().ok())
-                    .unwrap_or(120).clamp(1, 500);
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(120)
+                    .clamp(1, 500);
                 let max_total = std::env::var("AGENT_GOAL_MAX_CYCLES_TOTAL")
-                    .ok().and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(50_000).max(1);
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(50_000)
+                    .max(1);
                 if let Some(reason) = state.budget_limit(max_per_hour, max_total) {
                     state.pause(&reason)?;
-                    return Err(anyhow::anyhow!("objetivo pausado por presupuesto: {reason}"));
+                    return Err(anyhow::anyhow!(
+                        "objetivo pausado por presupuesto: {reason}"
+                    ));
                 }
             }
-            let previous = state.as_ref().map(|g| g.previous_summaries(8)).unwrap_or_default();
-            let attempt = state.as_ref().map(|g| g.attempts() as usize + 1).unwrap_or(cycle);
+            let previous = state
+                .as_ref()
+                .map(|g| g.previous_summaries(8))
+                .unwrap_or_default();
+            let attempt = state
+                .as_ref()
+                .map(|g| g.attempts() as usize + 1)
+                .unwrap_or(cycle);
             eprintln!(
                 "\n── objetivo · ciclo {attempt} · presupuesto local {cycle}/{max} · {}",
                 memory::truncate(goal, 80)
@@ -245,7 +265,9 @@ impl Agent {
                     if let Some(state) = &state {
                         state.record_attempt(&format!("ERROR de ejecución: {err:#}"))?;
                         if state.repeated_attempts(3) {
-                            state.pause("tres ciclos consecutivos con el mismo error de ejecución")?;
+                            state.pause(
+                                "tres ciclos consecutivos con el mismo error de ejecución",
+                            )?;
                         }
                     }
                     return Err(err);
@@ -255,7 +277,10 @@ impl Agent {
             if state.as_ref().map(|g| g.is_done()).unwrap_or(false) {
                 eprintln!(
                     "✓ objetivo completado · evidencia: {}",
-                    state.as_ref().and_then(|g| g.evidence()).unwrap_or_default()
+                    state
+                        .as_ref()
+                        .and_then(|g| g.evidence())
+                        .unwrap_or_default()
                 );
                 return Ok(last);
             }
@@ -264,7 +289,9 @@ impl Agent {
                 state.record_attempt(&last)?;
                 if state.repeated_attempts(3) {
                     state.pause("tres ciclos consecutivos sin progreso: respuesta idéntica")?;
-                    return Err(anyhow::anyhow!("objetivo pausado por estancamiento; revisa el diario y reanuda explícitamente con el mismo --goal cuando cambies la estrategia"));
+                    return Err(anyhow::anyhow!(
+                        "objetivo pausado por estancamiento; revisa el diario y reanuda explícitamente con el mismo --goal cuando cambies la estrategia"
+                    ));
                 }
             }
         }
@@ -509,14 +536,10 @@ mod tests {
         ];
         // Recién leído (índice >= keep_from): se conserva hasta que el modelo lo vea.
         prune_skill_context(&mut msgs, 1);
-        assert!(
-            matches!(&msgs[1], Msg::Tool { content, .. } if content == "PASOS LARGOS")
-        );
+        assert!(matches!(&msgs[1], Msg::Tool { content, .. } if content == "PASOS LARGOS"));
         // Ya visto: se libera del contexto.
         prune_skill_context(&mut msgs, 3);
-        assert!(
-            matches!(&msgs[1], Msg::Tool { content, .. } if content.starts_with("[liberado]"))
-        );
+        assert!(matches!(&msgs[1], Msg::Tool { content, .. } if content.starts_with("[liberado]")));
         // Las demás herramientas no se tocan.
         let mut otros = vec![Msg::Tool {
             id: "2".into(),

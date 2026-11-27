@@ -47,8 +47,8 @@ impl Browser {
             self.spawn()?;
         }
         let ws_url = self.page_ws_url()?;
-        let (mut ws, _) =
-            tungstenite::connect(&ws_url).with_context(|| format!("handshake CDP falló: {ws_url}"))?;
+        let (mut ws, _) = tungstenite::connect(&ws_url)
+            .with_context(|| format!("handshake CDP falló: {ws_url}"))?;
         if let MaybeTlsStream::Plain(stream) = ws.get_mut() {
             stream.set_read_timeout(Some(READ_TIMEOUT))?;
         }
@@ -99,7 +99,8 @@ impl Browser {
     }
 
     fn page_ws_url(&self) -> Result<String> {
-        let raw = http_get(&self.endpoint("/json/list")).context("no se pudo listar pestañas CDP")?;
+        let raw =
+            http_get(&self.endpoint("/json/list")).context("no se pudo listar pestañas CDP")?;
         let list: Value = serde_json::from_str(&raw)?;
         if let Some(pages) = list.as_array() {
             for page in pages {
@@ -169,7 +170,9 @@ impl Browser {
     }
 
     pub fn open(&mut self, url: &str) -> Result<String> {
-        if !(url.starts_with("http://") || url.starts_with("https://") || url.starts_with("file://"))
+        if !(url.starts_with("http://")
+            || url.starts_with("https://")
+            || url.starts_with("file://"))
         {
             bail!("url no soportada: {url}");
         }
@@ -312,9 +315,7 @@ mod tests {
         std::fs::write(&page, "<html><body><h1>HOLA-AGENTE</h1></body></html>").unwrap();
 
         let mut browser = Browser::new(9333, dir.join("profile"));
-        browser
-            .open(&format!("file://{}", page.display()))
-            .unwrap();
+        browser.open(&format!("file://{}", page.display())).unwrap();
         let text = browser.text().unwrap();
         assert!(text.contains("HOLA-AGENTE"), "texto inesperado: {text}");
         let clicked = browser.click("h1").unwrap();
