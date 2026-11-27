@@ -131,9 +131,19 @@ struct Disk {
     completed: Vec<GoalRecord>,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SaveFailpoint {
+    BeforeTempWrite,
+    AfterTempSyncBeforeRename,
+    AfterRenameBeforeDirectorySync,
+}
+
 pub struct GoalState {
     path: Option<PathBuf>,
     inner: Mutex<Disk>,
+    #[cfg(test)]
+    failpoint: Mutex<Option<SaveFailpoint>>,
 }
 
 impl Default for GoalState {
@@ -145,7 +155,12 @@ impl Default for GoalState {
 impl GoalState {
     /// Estado en memoria, útil para pruebas y ejecuciones efímeras.
     pub fn new() -> Self {
-        Self { path: None, inner: Mutex::new(Disk::default()) }
+        Self {
+            path: None,
+            inner: Mutex::new(Disk::default()),
+            #[cfg(test)]
+            failpoint: Mutex::new(None),
+        }
     }
 
     /// Abre o crea el estado persistente del objetivo raíz.
@@ -156,7 +171,28 @@ impl GoalState {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Disk::default(),
             Err(err) => return Err(err).with_context(|| format!("no se pudo leer {}", path.display())),
         };
-        Ok(Self { path: Some(path), inner: Mutex::new(disk) })
+        Ok(Self {
+            path: Some(path),
+            inner: Mutex::new(disk),
+            #[cfg(test)]
+            failpoint: Mutex::new(None),
+        })
+    }
+
+    #[cfg(test)]
+    fn fail_next_save_at(&self, point: SaveFailpoint) {
+        *self.failpoint.lock().unwrap() = Some(point);
+    }
+
+    #[cfg(test)]
+    fn check_save_failpoint(&self, point: SaveFailpoint) -> Result<()> {
+        let mut failpoint = self.failpoint.lock()
+            .map_err(|_| anyhow::anyhow!("failpoint de test bloqueado"))?;
+        if *failpoint == Some(point) {
+            *failpoint = None;
+            bail!("fallo de persistencia inyectado en {point:?}");
+        }
+        Ok(())
     }
 
     fn save(&self, disk: &Disk) -> Result<()> {
@@ -164,10 +200,16 @@ impl GoalState {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         std::fs::create_dir_all(parent)?;
         let tmp = path.with_extension("json.tmp");
+        #[cfg(test)]
+        self.check_save_failpoint(SaveFailpoint::BeforeTempWrite)?;
         std::fs::write(&tmp, serde_json::to_vec_pretty(disk)?)?;
         std::fs::File::open(&tmp)?.sync_all()?;
+        #[cfg(test)]
+        self.check_save_failpoint(SaveFailpoint::AfterTempSyncBeforeRename)?;
         std::fs::rename(&tmp, path)
             .with_context(|| format!("no se pudo persistir el objetivo en {}", path.display()))?;
+        #[cfg(test)]
+        self.check_save_failpoint(SaveFailpoint::AfterRenameBeforeDirectorySync)?;
         std::fs::File::open(parent)?.sync_all()?;
         Ok(())
     }
@@ -1074,6 +1116,67 @@ mod tests {
         assert_eq!(operation.status, OperationStatus::Succeeded);
         assert_eq!(operation.result_summary.as_deref(), Some("archivo escrito"));
         assert!(operation.args_fingerprint.starts_with("fnv1a64:"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fallo_antes_de_rename_no_publica_un_checkpoint_incompleto() {
+        let dir = std::env::temp_dir().join(format!("agent-save-fail-before-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("goal.json");
+        let goal = GoalState::open(path.clone()).unwrap();
+        goal.start("checkpoint seguro").unwrap();
+
+        goal.fail_next_save_at(SaveFailpoint::AfterTempSyncBeforeRename);
+        assert!(goal.begin_cycle().is_err());
+        drop(goal);
+
+        let reopened = GoalState::open(path.clone()).unwrap();
+        assert!(reopened.active().unwrap().active_cycle.is_none());
+        assert_eq!(reopened.begin_cycle().unwrap(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fallo_al_guardar_resultado_de_efecto_externo_se_recupera_como_unknown() {
+        let dir = std::env::temp_dir().join(format!("agent-save-fail-result-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("goal.json");
+        let goal = GoalState::open(path.clone()).unwrap();
+        goal.start("resultado externo ambiguo").unwrap();
+        goal.begin_cycle().unwrap();
+        let id = goal.begin_operation("send", &serde_json::json!({"id": 7})).unwrap().unwrap();
+
+        // Simula que el efecto externo ocurrió, pero el checkpoint final no llegó al rename.
+        goal.fail_next_save_at(SaveFailpoint::AfterTempSyncBeforeRename);
+        assert!(goal.finish_operation(&id, true, "efecto ejecutado").is_err());
+        drop(goal);
+
+        let recovered = GoalState::open(path).unwrap();
+        assert_eq!(recovered.recover_interrupted().unwrap(), 2);
+        assert_eq!(recovered.active().unwrap().operations[0].status, OperationStatus::Unknown);
+        assert!(recovered.begin_cycle().unwrap() > 1);
+        assert!(recovered.begin_operation("send", &serde_json::json!({"id": 7})).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rename_completado_con_error_antes_de_sync_del_directorio_conserva_resultado() {
+        let dir = std::env::temp_dir().join(format!("agent-save-fail-after-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("goal.json");
+        let goal = GoalState::open(path.clone()).unwrap();
+        goal.start("resultado tras rename").unwrap();
+        goal.begin_cycle().unwrap();
+        let id = goal.begin_operation("write", &serde_json::json!({"path": "x"})).unwrap().unwrap();
+
+        goal.fail_next_save_at(SaveFailpoint::AfterRenameBeforeDirectorySync);
+        assert!(goal.finish_operation(&id, true, "escrito").is_err());
+        drop(goal);
+
+        let reopened = GoalState::open(path).unwrap();
+        assert_eq!(reopened.active().unwrap().operations[0].status, OperationStatus::Succeeded);
+        assert_eq!(reopened.active().unwrap().operations[0].result_summary.as_deref(), Some("escrito"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
