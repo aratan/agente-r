@@ -192,6 +192,18 @@ impl Agent {
 
         let mut last = String::new();
         for cycle in 1..=max {
+            if let Some(state) = &state {
+                let max_per_hour = std::env::var("AGENT_GOAL_MAX_CYCLES_PER_HOUR")
+                    .ok().and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(120).clamp(1, 500);
+                let max_total = std::env::var("AGENT_GOAL_MAX_CYCLES_TOTAL")
+                    .ok().and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(50_000).max(1);
+                if let Some(reason) = state.budget_limit(max_per_hour, max_total) {
+                    state.pause(&reason)?;
+                    return Err(anyhow::anyhow!("objetivo pausado por presupuesto: {reason}"));
+                }
+            }
             let previous = state.as_ref().map(|g| g.previous_summaries(8)).unwrap_or_default();
             let attempt = state.as_ref().map(|g| g.attempts() as usize + 1).unwrap_or(cycle);
             eprintln!(
