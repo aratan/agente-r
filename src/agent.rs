@@ -198,7 +198,11 @@ impl Agent {
                 "\n── objetivo · ciclo {attempt} · presupuesto local {cycle}/{max} · {}",
                 memory::truncate(goal, 80)
             );
-            let prompt = goals::attempt_prompt(goal, attempt, max, &previous);
+            let mut prompt = goals::attempt_prompt(goal, attempt, max, &previous);
+            if let Some(state) = &state {
+                prompt.push_str("\\n");
+                prompt.push_str(&state.plan_prompt());
+            }
             last = match self.run(&prompt) {
                 Ok(answer) => answer,
                 Err(err) => {
