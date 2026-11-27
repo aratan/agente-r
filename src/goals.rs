@@ -51,6 +51,39 @@ pub struct GoalTask {
     pub updated_at: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationStatus {
+    Started,
+    Succeeded,
+    Failed,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationRecord {
+    pub id: String,
+    pub cycle: u64,
+    pub tool: String,
+    pub args_fingerprint: String,
+    pub status: OperationStatus,
+    pub started_at: u64,
+    #[serde(default)]
+    pub finished_at: Option<u64>,
+    #[serde(default)]
+    pub result_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CycleRecord {
+    pub number: u64,
+    pub started_at: u64,
+    #[serde(default)]
+    pub finished_at: Option<u64>,
+    #[serde(default)]
+    pub interrupted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FailureRecord {
     pub fingerprint: String,
@@ -80,6 +113,12 @@ pub struct GoalRecord {
     pub tasks: Vec<GoalTask>,
     #[serde(default)]
     pub failures: Vec<FailureRecord>,
+    #[serde(default)]
+    pub cycles: Vec<CycleRecord>,
+    #[serde(default)]
+    pub operations: Vec<OperationRecord>,
+    #[serde(default)]
+    pub active_cycle: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -115,6 +154,37 @@ impl GoalState {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Disk::default(),
             Err(err) => return Err(err).with_context(|| format!("no se pudo leer {}", path.display())),
         };
+        let mut disk = disk;
+        if let Some(record) = disk.active.as_mut() {
+            let mut changed = false;
+            for operation in &mut record.operations {
+                if operation.status == OperationStatus::Started {
+                    operation.status = OperationStatus::Unknown;
+                    operation.finished_at = Some(now());
+                    operation.result_summary = Some("proceso interrumpido; resultado externo desconocido; no repetir automáticamente".into());
+                    changed = true;
+                }
+            }
+            if let Some(cycle_number) = record.active_cycle.take() {
+                if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number) {
+                    cycle.interrupted = true;
+                    cycle.finished_at = Some(now());
+                }
+                changed = true;
+            }
+            if changed {
+                record.updated_at = now();
+                let path_ref = &path;
+                let parent = path_ref.parent().unwrap_or_else(|| Path::new("."));
+                std::fs::create_dir_all(parent)?;
+                let tmp = path_ref.with_extension("json.tmp");
+                let bytes = serde_json::to_vec_pretty(&disk)?;
+                std::fs::write(&tmp, bytes)?;
+                std::fs::File::open(&tmp)?.sync_all()?;
+                std::fs::rename(&tmp, path_ref)?;
+                std::fs::File::open(parent)?.sync_all()?;
+            }
+        }
         Ok(Self { path: Some(path), inner: Mutex::new(disk) })
     }
 
@@ -125,8 +195,11 @@ impl GoalState {
         }
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec_pretty(disk)?)?;
+        std::fs::File::open(&tmp)?.sync_all()?;
         std::fs::rename(&tmp, path)
-            .with_context(|| format!("no se pudo persistir el objetivo en {}", path.display()))
+            .with_context(|| format!("no se pudo persistir el objetivo en {}", path.display()))?;
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok(())
     }
 
     /// Fija el objetivo único. Reanuda el mismo objetivo; rechaza reemplazar
@@ -174,9 +247,83 @@ impl GoalState {
             evidence: None,
             tasks: Vec::new(),
             failures: Vec::new(),
+            cycles: Vec::new(),
+            operations: Vec::new(),
+            active_cycle: None,
         });
         self.save(&disk)?;
         Ok(())
+    }
+
+    /// Persiste el comienzo del ciclo antes de invocar el modelo.
+    pub fn begin_cycle(&self) -> Result<u64> {
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        if record.status != GoalStatus::Active { bail!("el objetivo no está activo"); }
+        if let Some(previous) = record.active_cycle.take() {
+            if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == previous) {
+                cycle.interrupted = true;
+                cycle.finished_at = Some(now());
+            }
+            for operation in record.operations.iter_mut().filter(|op| op.cycle == previous && op.status == OperationStatus::Started) {
+                operation.status = OperationStatus::Unknown;
+                operation.finished_at = Some(now());
+                operation.result_summary = Some("ciclo anterior sin cierre; resultado desconocido".into());
+            }
+        }
+        let number = record.attempt_count.saturating_add(1);
+        record.cycles.push(CycleRecord { number, started_at: now(), finished_at: None, interrupted: false });
+        if record.cycles.len() > 200 {
+            record.cycles.drain(..record.cycles.len() - 200);
+        }
+        record.active_cycle = Some(number);
+        record.updated_at = now();
+        self.save(&disk)?;
+        Ok(number)
+    }
+
+    /// Registra la intención antes de ejecutar una herramienta. Solo se conserva
+    /// un fingerprint; los argumentos potencialmente sensibles nunca se guardan.
+    pub fn begin_operation(&self, tool: &str, args: &serde_json::Value) -> Result<Option<String>> {
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let Some(cycle) = record.active_cycle else { return Ok(None) };
+        let canonical = serde_json::to_vec(args)?;
+        let fingerprint = stable_fingerprint(&canonical);
+        let sequence = record.operations.iter().filter(|op| op.cycle == cycle).count() + 1;
+        let id = format!("cycle-{cycle}-op-{sequence}");
+        record.operations.push(OperationRecord {
+            id: id.clone(),
+            cycle,
+            tool: truncate(tool, 100),
+            args_fingerprint: fingerprint,
+            status: OperationStatus::Started,
+            started_at: now(),
+            finished_at: None,
+            result_summary: None,
+        });
+        if record.operations.len() > 1000 {
+            record.operations.drain(..record.operations.len() - 1000);
+        }
+        record.updated_at = now();
+        self.save(&disk)?;
+        Ok(Some(id))
+    }
+
+    /// Guarda el resultado después de ejecutar la herramienta.
+    pub fn finish_operation(&self, id: &str, succeeded: bool, result: &str) -> Result<()> {
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let operation = record.operations.iter_mut().find(|op| op.id == id)
+            .ok_or_else(|| anyhow::anyhow!("no existe la operación {id}"))?;
+        if operation.status != OperationStatus::Started {
+            bail!("la operación {id} ya no está en estado started");
+        }
+        operation.status = if succeeded { OperationStatus::Succeeded } else { OperationStatus::Failed };
+        operation.finished_at = Some(now());
+        operation.result_summary = Some(truncate(result, 800));
+        record.updated_at = now();
+        self.save(&disk)
     }
 
     /// Añade el resultado de un ciclo. El resumen no se interpreta como éxito.
@@ -186,6 +333,11 @@ impl GoalState {
         if record.status != GoalStatus::Active { bail!("el objetivo no está activo"); }
         record.attempt_count += 1;
         let number = record.attempt_count;
+        if let Some(cycle_number) = record.active_cycle.take() {
+            if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number) {
+                cycle.finished_at = Some(now());
+            }
+        }
         record.attempts.push(AttemptRecord {
             number,
             at: now(),
@@ -529,6 +681,16 @@ fn has_dependency_cycle(tasks: &[GoalTask]) -> bool {
     let mut visiting = Vec::new();
     let mut visited = Vec::new();
     tasks.iter().any(|task| visit(&task.id, tasks, &mut visiting, &mut visited))
+}
+
+fn stable_fingerprint(bytes: &[u8]) -> String {
+    // FNV-1a 64-bit: fingerprint determinista sin persistir argumentos.
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv1a64:{hash:016x}")
 }
 
 fn now() -> u64 {
