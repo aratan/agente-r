@@ -1528,15 +1528,17 @@ impl Tool for GoalPlanTool {
             "add" | "update" => {
                 let id = req_str(args, "id")?;
                 let title = req_str(args, "title")?;
-                let deps = args.get("depends_on").and_then(Value::as_array)
-                    .map(|items| {
-                        items.iter().map(|item| item.as_str().map(str::to_string)
-                            .ok_or_else(|| anyhow!("cada dependencia debe ser un string")))
-                            .collect::<Result<Vec<_>>>()
-                    }).transpose()?.unwrap_or_default();
-                if args.get("depends_on").is_some_and(|v| !v.is_array()) {
-                    bail!("depends_on debe ser un array de strings");
-                }
+                let deps = if let Some(value) = args.get("depends_on") {
+                    let items = value.as_array().ok_or_else(|| anyhow!("depends_on debe ser un array de strings"))?;
+                    items.iter().map(|item| item.as_str().map(str::to_string)
+                        .ok_or_else(|| anyhow!("cada dependencia debe ser un string")))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    self.goal.tasks().into_iter()
+                        .find(|task| task.id == id)
+                        .map(|task| task.depends_on)
+                        .unwrap_or_default()
+                };
                 self.goal.upsert_task(&id, &title, &deps)?;
                 Ok(format!("Tarea {id} guardada en el plan persistente."))
             }
