@@ -307,12 +307,14 @@ impl GoalState {
                 goal.failures.iter().rev().take(limit).cloned().collect::<Vec<_>>()
             })).unwrap_or_default();
         if failures.is_empty() { return String::new(); }
-        let mut out = String::from("DIARIO DE FALLOS (no repitas la misma estrategia sin cambiar condiciones):\\n");
+        let mut out = String::from("DIARIO DE FALLOS (no repitas la misma estrategia sin cambiar condiciones):");
+        out.push('\n');
         for failure in failures.iter().rev() {
-            out.push_str(&format!("- [{}] {} | síntoma: {} | estrategia fallida: {} | cambio de condiciones declarado: {}\\n",
+            out.push_str(&format!("- [{}] {} | síntoma: {} | estrategia fallida: {} | cambio de condiciones declarado: {}",
                 failure.category, failure.fingerprint, failure.symptom, failure.strategy,
                 if failure.condition_changed { "sí" } else { "no" }
             ));
+            out.push('\\n');
         }
         out
     }
