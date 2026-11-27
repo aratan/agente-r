@@ -42,8 +42,9 @@ local-agent · agente LLM local (Ollama / llama.cpp) con RAG, web, memoria y sub
 
 USO
   local-agent [opciones] [petición...]
-  local-agent --goal \"objetivo\"        persigue la meta hasta cumplirla
-  local-agent --daemon                 ejecuta la agenda de tareas periódicas
+  local-agent --goal \"objetivo\"        ejecuta un lote y persiste el progreso
+  local-agent --goal \"objetivo\" --daemon trabaja por lotes hasta completar
+  local-agent --daemon                 reanuda el objetivo activo y la agenda periódica
   local-agent --telegram               atiende Telegram (TELEGRAM_BOT_TOKEN)
   local-agent --voice                  conversación por micrófono y voz
   local-agent --info                   hardware, modelos y estado
