@@ -121,7 +121,7 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
 - Ejecuta un harness sintético de larga duración que reabre `.agent/goal.json`, completa ciclos y simula una interrupción cada 17 iteraciones entre la intención y el resultado de una herramienta.
 - El harness reconcilia únicamente operaciones sintéticas; no llama a proveedores, red ni herramientas externas.
 - Por defecto dura 48 horas y registra cada minuto duración, iteraciones, recuperaciones, tamaño del estado y pico de RSS en Linux.
-- Ejecutar: `scripts/goal-soak.sh`. Ajustar con `AGENT_GOAL_SOAK_SECONDS` y `AGENT_GOAL_SOAK_INTERVAL_MS`.
+- Ejecutar: `bash scripts/goal-soak.sh` (el script no requiere permiso de ejecución). Ajustar con `AGENT_GOAL_SOAK_SECONDS` y `AGENT_GOAL_SOAK_INTERVAL_MS`.
 - El test es ignorado por CI de forma deliberada. Una ejecución corta valida el harness, pero **no** satisface el criterio de soak de varios días. Registrar duración y resultado real antes de cerrar la issue.
 
 El diario causal conserva hasta 200 fallos con fingerprint, categoría, síntoma y estrategia
