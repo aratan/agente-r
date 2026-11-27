@@ -203,8 +203,18 @@ impl GoalState {
         let existing = goal.tasks.iter().position(|task| task.id == id);
         let status = existing.map(|i| goal.tasks[i].status.clone()).unwrap_or(TaskStatus::Pending);
         let evidence = existing.and_then(|i| goal.tasks[i].evidence.clone());
-        let verified = existing.is_some_and(|i| goal.tasks[i].verified);
-        let verification_output = existing.and_then(|i| goal.tasks[i].verification_output.clone());
+        let verified = existing.is_some_and(|i| {
+            let previous = &goal.tasks[i];
+            previous.verified
+                && previous.title == title
+                && previous.depends_on == depends_on
+                && previous.checks == checks
+        });
+        let verification_output = if verified {
+            existing.and_then(|i| goal.tasks[i].verification_output.clone())
+        } else {
+            None
+        };
         if depends_on.iter().collect::<std::collections::HashSet<_>>().len() != depends_on.len() {
             bail!("dependencias duplicadas");
         }
@@ -362,10 +372,12 @@ impl GoalState {
         }
         let mut out = String::from("PLAN PERSISTENTE (respeta dependencias; trabaja primero en tareas listas):\n");
         for task in tasks {
-            out.push_str(&format!("- [{}] {} — {}{}\n",
+            out.push_str(&format!("- [{}{}] {} — {}{} | checks: {}\n",
                 match task.status { TaskStatus::Pending => "pendiente", TaskStatus::InProgress => "en curso", TaskStatus::Completed => "completada" },
+                if task.verified { " · verificada" } else { "" },
                 task.id, task.title,
-                if task.depends_on.is_empty() { String::new() } else { format!(" (depende de: {})", task.depends_on.join(", ")) }
+                if task.depends_on.is_empty() { String::new() } else { format!(" (depende de: {})", task.depends_on.join(", ")) },
+                if task.checks.is_empty() { "sin definir".to_string() } else { task.checks.join(", ") }
             ));
         }
         out
