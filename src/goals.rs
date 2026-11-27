@@ -58,6 +58,8 @@ pub enum OperationStatus {
     Succeeded,
     Failed,
     Unknown,
+    ResolvedApplied,
+    ResolvedNotApplied,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,7 +291,7 @@ impl GoalState {
         if record.operations.iter().any(|operation| {
             operation.tool == tool
                 && operation.args_fingerprint == fingerprint
-                && operation.status == OperationStatus::Unknown
+                && matches!(operation.status, OperationStatus::Unknown | OperationStatus::ResolvedApplied)
         }) {
             bail!("operación bloqueada: existe una ejecución anterior con el mismo fingerprint y resultado desconocido; reconcilia el efecto externo antes de intentar repetirla");
         }
@@ -325,6 +327,29 @@ impl GoalState {
         operation.status = if succeeded { OperationStatus::Succeeded } else { OperationStatus::Failed };
         operation.finished_at = Some(now());
         operation.result_summary = Some(truncate(result, 800));
+        record.updated_at = now();
+        self.save(&disk)
+    }
+
+    /// Registra la reconciliación humana de una operación cuyo resultado era
+    /// desconocido. "applied" impide repetir; "not applied" permite reintentar.
+    pub fn resolve_operation(&self, id: &str, applied: bool, evidence: &str) -> Result<()> {
+        let evidence = evidence.trim();
+        if evidence.is_empty() { bail!("la evidencia de reconciliación es obligatoria"); }
+        let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
+        let record = disk.active.as_mut().ok_or_else(|| anyhow::anyhow!("no hay objetivo activo"))?;
+        let operation = record.operations.iter_mut().find(|operation| operation.id == id)
+            .ok_or_else(|| anyhow::anyhow!("no existe la operación {id}"))?;
+        if operation.status != OperationStatus::Unknown {
+            bail!("solo se pueden reconciliar operaciones con estado unknown");
+        }
+        operation.status = if applied {
+            OperationStatus::ResolvedApplied
+        } else {
+            OperationStatus::ResolvedNotApplied
+        };
+        operation.finished_at = Some(now());
+        operation.result_summary = Some(truncate(&format!("reconciliación humana: {}", evidence), 800));
         record.updated_at = now();
         self.save(&disk)
     }
