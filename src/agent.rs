@@ -127,9 +127,26 @@ impl Agent {
             fresh_from = msgs.len();
 
             for call in &turn.calls {
+                // Journal-before-effect: si el proceso cae tras la herramienta,
+                // el reinicio encontrará la operación como resultado desconocido.
+                let operation_id = match &self.opts.goal {
+                    Some(goal) => goal.begin_operation(&call.name, &call.args)?,
+                    None => None,
+                };
                 let out = match self.tools.run(&call.name, &call.args) {
-                    Ok(text) => text,
-                    Err(err) => format!("ERROR: {err:#}"),
+                    Ok(text) => {
+                        if let (Some(goal), Some(id)) = (&self.opts.goal, operation_id.as_deref()) {
+                            goal.finish_operation(id, true, &text)?;
+                        }
+                        text
+                    }
+                    Err(err) => {
+                        let message = format!("ERROR: {err:#}");
+                        if let (Some(goal), Some(id)) = (&self.opts.goal, operation_id.as_deref()) {
+                            goal.finish_operation(id, false, &message)?;
+                        }
+                        message
+                    }
                 };
                 eprintln!("     ↳ {}", memory::truncate(&out, 180));
                 msgs.push(Msg::Tool {
@@ -215,6 +232,11 @@ impl Agent {
                 prompt.push('\n');
                 prompt.push_str(&state.plan_prompt());
                 prompt.push_str(&state.failure_prompt(8));
+            }
+            if let Some(state) = &state {
+                // El checkpoint existe antes de la llamada al modelo, incluso si
+                // el proceso termina durante la inferencia.
+                state.begin_cycle()?;
             }
             last = match self.run(&prompt) {
                 Ok(answer) => answer,
