@@ -1609,10 +1609,10 @@ mod tests {
         assert_eq!(record.operations.len(), 1_000);
         assert!(record.operations.iter().any(|op| op.id == unknown));
         assert!(record.operations.iter().all(|op| op.status == OperationStatus::Started));
-        assert_eq!(
-            ids.len(),
-            record.operations.len() + 1, // el primer terminal se podó
-        );
+        assert_eq!(record.operation_sequence, 1_999);
+        let retained_ids: std::collections::HashSet<_> =
+            record.operations.iter().map(|op| op.id.as_str()).collect();
+        assert_eq!(retained_ids.len(), record.operations.len());
 
         goal.recover_interrupted().unwrap();
         assert!(goal
