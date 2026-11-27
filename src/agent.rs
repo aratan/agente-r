@@ -209,6 +209,9 @@ impl Agent {
                 Err(err) => {
                     if let Some(state) = &state {
                         state.record_attempt(&format!("ERROR de ejecución: {err:#}"))?;
+                        if state.repeated_attempts(3) {
+                            state.pause("tres ciclos consecutivos con el mismo error de ejecución")?;
+                        }
                     }
                     return Err(err);
                 }
@@ -224,6 +227,10 @@ impl Agent {
 
             if let Some(state) = &state {
                 state.record_attempt(&last)?;
+                if state.repeated_attempts(3) {
+                    state.pause("tres ciclos consecutivos sin progreso: respuesta idéntica")?;
+                    return Err(anyhow::anyhow!("objetivo pausado por estancamiento; revisa el diario y reanuda explícitamente con el mismo --goal cuando cambies la estrategia"));
+                }
             }
         }
         Ok(last)
