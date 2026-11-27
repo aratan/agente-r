@@ -496,8 +496,8 @@ fn daemon(
             let started = Instant::now();
             let result = agent.pursue(&active.goal, goal_attempts);
             let body = match result {
-                Ok(text) => format!("OBJETIVO · {:.1}s\\n{text}\\n", started.elapsed().as_secs_f64()),
-                Err(err) => format!("OBJETIVO ERROR · {:.1}s\\n{err:#}\\n", started.elapsed().as_secs_f64()),
+                Ok(text) => format!("OBJETIVO · {:.1}s\n{text}\n", started.elapsed().as_secs_f64()),
+                Err(err) => format!("OBJETIVO ERROR · {:.1}s\n{err:#}\n", started.elapsed().as_secs_f64()),
             };
             let dir = scheduler::runs_dir(orchestra.workspace.root());
             std::fs::create_dir_all(&dir)?;
@@ -505,7 +505,7 @@ fn daemon(
                 .create(true)
                 .append(true)
                 .open(dir.join("goal.log"))?;
-            writeln!(file, "--- {} ---\\n{body}", scheduler::now())?;
+            writeln!(file, "--- {} ---\n{body}", scheduler::now())?;
             println!("{body}");
         }
 
