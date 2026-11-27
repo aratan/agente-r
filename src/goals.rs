@@ -918,6 +918,53 @@ mod tests {
     }
 
     #[test]
+    fn operacion_interrumpida_se_marca_unknown_y_no_se_repite() {
+        let dir = std::env::temp_dir().join(format!("agent-op-recovery-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(".agent").join("goal.json");
+        let goal = GoalState::open(path.clone()).unwrap();
+        goal.start("recuperar operación").unwrap();
+        let first_cycle = goal.begin_cycle().unwrap();
+        let operation = goal.begin_operation("send_email", &serde_json::json!({
+            "to": "private@example.test",
+            "body": "contenido sensible"
+        })).unwrap().unwrap();
+        drop(goal);
+
+        let recovered = GoalState::open(path.clone()).unwrap();
+        let record = recovered.active().unwrap();
+        assert_eq!(record.operations[0].status, OperationStatus::Unknown);
+        assert!(!record.operations[0].result_summary.as_deref().unwrap().contains("private@example.test"));
+        assert!(record.cycles.iter().any(|cycle| cycle.number == first_cycle && cycle.interrupted));
+        assert!(record.active_cycle.is_none());
+
+        let second_cycle = recovered.begin_cycle().unwrap();
+        assert!(second_cycle > first_cycle, "los ciclos no deben reutilizar IDs tras un crash");
+        let next = recovered.begin_operation("send_email", &serde_json::json!({"to":"other"})).unwrap().unwrap();
+        assert_ne!(next, operation);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn operacion_completada_se_persiste_con_fingerprint_y_resultado() {
+        let dir = std::env::temp_dir().join(format!("agent-op-success-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("goal.json");
+        let goal = GoalState::open(path.clone()).unwrap();
+        goal.start("ejecutar herramienta").unwrap();
+        goal.begin_cycle().unwrap();
+        let id = goal.begin_operation("fs_write", &serde_json::json!({"path":"x","content":"secret"})).unwrap().unwrap();
+        goal.finish_operation(&id, true, "archivo escrito").unwrap();
+        drop(goal);
+        let reopened = GoalState::open(path).unwrap();
+        let operation = &reopened.active().unwrap().operations[0];
+        assert_eq!(operation.status, OperationStatus::Succeeded);
+        assert_eq!(operation.result_summary.as_deref(), Some("archivo escrito"));
+        assert!(operation.args_fingerprint.starts_with("fnv1a64:"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn el_prompt_incluye_historial_y_no_confunde_tarea_con_meta() {
         let prompt = attempt_prompt("completar proyecto", 4, 8, &["falló la compilación".into()]);
         assert!(prompt.contains("ciclo 4"));
