@@ -200,7 +200,7 @@ impl Agent {
             );
             let mut prompt = goals::attempt_prompt(goal, attempt, max, &previous);
             if let Some(state) = &state {
-                prompt.push_str("\\n");
+                prompt.push('\n');
                 prompt.push_str(&state.plan_prompt());
             }
             last = match self.run(&prompt) {
