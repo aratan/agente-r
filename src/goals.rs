@@ -1035,6 +1035,29 @@ mod tests {
     }
 
     #[test]
+    fn reconciliacion_humana_distingue_efecto_aplicado_y_no_aplicado() {
+        let dir = std::env::temp_dir().join(format!("agent-op-resolve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("goal.json");
+        let goal = GoalState::open(path.clone()).unwrap();
+        goal.start("reconciliar operaciones").unwrap();
+        goal.begin_cycle().unwrap();
+        let applied = goal.begin_operation("send", &serde_json::json!({"id":1})).unwrap().unwrap();
+        let not_applied = goal.begin_operation("send", &serde_json::json!({"id":2})).unwrap().unwrap();
+        drop(goal);
+
+        let recovered = GoalState::open(path).unwrap();
+        recovered.recover_interrupted().unwrap();
+        recovered.resolve_operation(&applied, true, "el proveedor confirma el envío").unwrap();
+        recovered.resolve_operation(&not_applied, false, "el proveedor confirma que no recibió la petición").unwrap();
+        recovered.begin_cycle().unwrap();
+        assert!(recovered.begin_operation("send", &serde_json::json!({"id":1})).is_err());
+        assert!(recovered.begin_operation("send", &serde_json::json!({"id":2})).is_ok());
+        assert!(recovered.resolve_operation(&applied, true, "duplicado").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn operacion_completada_se_persiste_con_fingerprint_y_resultado() {
         let dir = std::env::temp_dir().join(format!("agent-op-success-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
