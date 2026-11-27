@@ -174,33 +174,44 @@ impl Agent {
         Ok(answer)
     }
 
-    /// Insiste en una meta hasta cumplirla o agotar intentos.
+    /// Ejecuta un presupuesto de ciclos y conserva el progreso entre procesos.
+    /// Repetir el mismo objetivo reanuda el historial; uno distinto no desplaza
+    /// silenciosamente una meta que siga activa.
     pub fn pursue(&mut self, goal: &str, max_attempts: usize) -> Result<String> {
         let max = max_attempts.max(1);
-        if let Some(state) = &self.opts.goal {
-            state.reset();
+        let state = self.opts.goal.as_ref();
+        if let Some(state) = state {
+            state.start(goal)?;
+            if state.is_done() {
+                return Ok(format!(
+                    "El objetivo ya estaba completado. Evidencia: {}",
+                    state.evidence().unwrap_or_default()
+                ));
+            }
         }
-        let mut previous: Vec<String> = Vec::new();
+
         let mut last = String::new();
-        for attempt in 1..=max {
+        for cycle in 1..=max {
+            let previous = state.map(|g| g.previous_summaries(8)).unwrap_or_default();
+            let attempt = state.map(|g| g.attempts() as usize + 1).unwrap_or(cycle);
             eprintln!(
-                "\n── meta · intento {attempt}/{max} · {} ",
+                "\n── objetivo · ciclo {attempt} · presupuesto local {cycle}/{max} · {}",
                 memory::truncate(goal, 80)
             );
             let prompt = goals::attempt_prompt(goal, attempt, max, &previous);
             last = self.run(&prompt)?;
-            if self.opts.goal.as_ref().map(|g| g.is_done()).unwrap_or(false) {
+
+            if state.map(|g| g.is_done()).unwrap_or(false) {
                 eprintln!(
-                    "✓ meta cumplida (intento {attempt}) · evidencia: {}",
-                    self.opts
-                        .goal
-                        .as_ref()
-                        .and_then(|g| g.evidence())
-                        .unwrap_or_default()
+                    "✓ objetivo completado · evidencia: {}",
+                    state.and_then(|g| g.evidence()).unwrap_or_default()
                 );
                 return Ok(last);
             }
-            previous.push(memory::truncate(&last, 240));
+
+            if let Some(state) = state {
+                state.record_attempt(&last)?;
+            }
         }
         Ok(last)
     }
