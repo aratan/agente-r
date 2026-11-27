@@ -111,6 +111,9 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
   Cambiar el título, las dependencias o los checks invalida la verificación anterior.
 - `goal_done` no permite cerrar el objetivo mientras haya tareas pendientes, en curso o no verificadas.
 - Cada ciclo recibe el plan y el diario de fallos para reanudar el trabajo tras una interrupción.
+- El governor pausa el objetivo tras tres resultados consecutivos idénticos (incluidos errores
+  del proveedor), registra el motivo y evita quemar ciclos sin progreso. Para reanudar, vuelve
+  a pasar el mismo objetivo con `--goal`; un objetivo pausado no se sustituye por otro.
 - El diario causal conserva hasta 200 fallos con fingerprint, categoría, síntoma y estrategia
   probada. `goal_failure` bloquea repetir el mismo fingerprint+estrategia salvo que el agente
   declare y describa un cambio de condiciones; los últimos fallos se inyectan en los ciclos
