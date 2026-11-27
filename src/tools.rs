@@ -1646,7 +1646,6 @@ impl Tool for GoalVerifyTool {
         let mut failures = 0usize;
         for task in selected {
             if task.status != crate::goals::TaskStatus::Completed {
-                self.goal.set_task_verification(&task.id, false, "la tarea no está completada")?;
                 failures += 1;
                 report.push_str(&format!("- {}: FAIL; tarea no completada\n", task.id));
                 continue;
