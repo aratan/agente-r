@@ -94,18 +94,21 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
   es acumulativo. Se archivan hasta 100 objetivos completados.
 - Solo el agente raíz puede cerrar el objetivo global mediante `goal_done`. Los subagentes
   devuelven resultados al agente raíz.
-- El agente raíz dispone de `goal_task` para crear/actualizar tareas, declarar dependencias,
-  iniciar tareas, completarlas con evidencia y consultar el plan. El grafo persistente se guarda
-  dentro de `.agent/goal.json`; rechaza dependencias inexistentes/cíclicas y no permite
-  completar una tarea antes que sus dependencias. El objetivo global no se puede cerrar mientras
-  quede alguna tarea pendiente o en curso.
-- Cada ciclo recibe el plan persistente para retomar la siguiente tarea tras una interrupción.
+- El agente raíz dispone de `goal_task` para crear/actualizar tareas, dependencias y checks
+  de aceptación, iniciar tareas, aportar evidencia y consultar el plan. El grafo se guarda en
+  `.agent/goal.json`; rechaza dependencias inexistentes/cíclicas y no permite saltárselas.
+- `goal_verify` es un evaluador determinista separado: ejecuta checks exactos de una lista
+  permitida (cargo test/clippy/check/fmt, git diff --check, pytest, npm test, go test y make test).
+  Una tarea no queda verificada por una declaración textual; los checks deben terminar con exit 0.
+  Cambiar el título, las dependencias o los checks invalida la verificación anterior.
+- `goal_done` no permite cerrar el objetivo mientras haya tareas pendientes, en curso o no verificadas.
+- Cada ciclo recibe el plan y el diario de fallos para reanudar el trabajo tras una interrupción.
 - El diario causal conserva hasta 200 fallos con fingerprint, categoría, síntoma y estrategia
   probada. `goal_failure` bloquea repetir el mismo fingerprint+estrategia salvo que el agente
   declare y describa un cambio de condiciones; los últimos fallos se inyectan en los ciclos
   siguientes para reducir bucles de ensayo idéntico.
-- **Límite pendiente:** `goal_done` todavía acepta evidencia textual; no hay aún un evaluador
-  independiente que compruebe por sí mismo los criterios de aceptación.
+- **Límite pendiente:** el evaluador solo ejecuta checks de la lista permitida; todavía no valida
+  de forma general objetivos no ejecutables ni interpreta criterios arbitrarios.
 
 ### Agenda de tareas
 - `schedule_add` / `schedule_list` / `schedule_remove` y `--every 30m --task "..."`.
