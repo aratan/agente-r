@@ -135,9 +135,11 @@ impl GoalState {
         let goal = goal.trim();
         if goal.is_empty() { bail!("el objetivo no puede estar vacío"); }
         let mut disk = self.inner.lock().map_err(|_| anyhow::anyhow!("estado de objetivo bloqueado"))?;
-        if let Some(current) = disk.active.as_ref() {
-            if current.goal == goal {
-                match current.status {
+        let existing = disk.active.as_ref()
+            .map(|current| (current.goal.clone(), current.status, current.id.clone()));
+        if let Some((current_goal, current_status, current_id)) = existing {
+            if current_goal == goal {
+                match current_status {
                     GoalStatus::Active | GoalStatus::Completed => return Ok(()),
                     GoalStatus::Paused => {
                         let record = disk.active.as_mut().expect("objetivo presente");
@@ -149,8 +151,8 @@ impl GoalState {
                     }
                 }
             }
-            if current.status == GoalStatus::Active || current.status == GoalStatus::Paused {
-                bail!("hay un objetivo activo o pausado ({}): {}; reanúdalo o complétalo antes de iniciar otro", current.id, current.goal);
+            if current_status == GoalStatus::Active || current_status == GoalStatus::Paused {
+                bail!("hay un objetivo activo o pausado ({current_id}): {current_goal}; reanúdalo o complétalo antes de iniciar otro");
             }
         }
         if let Some(completed) = disk.active.take() {
