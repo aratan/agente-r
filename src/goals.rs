@@ -412,6 +412,21 @@ impl GoalState {
         self.save(&disk)
     }
 
+    /// Presupuesto persistente de ciclos. El contador total nunca se reinicia al reanudar.
+    pub fn budget_limit(&self, max_per_hour: usize, max_total: u64) -> Option<String> {
+        self.inner.lock().ok().and_then(|disk| disk.active.as_ref().and_then(|goal| {
+            if goal.attempt_count >= max_total {
+                return Some(format!("límite total de ciclos alcanzado ({max_total})"));
+            }
+            let cutoff = now().saturating_sub(3600);
+            let recent = goal.attempts.iter().filter(|attempt| attempt.at >= cutoff).count();
+            if recent >= max_per_hour {
+                return Some(format!("límite horario alcanzado ({max_per_hour} ciclos/hora)"));
+            }
+            None
+        }))
+    }
+
     /// Detecta respuestas idénticas consecutivas, señal determinista de estancamiento.
     pub fn repeated_attempts(&self, limit: usize) -> bool {
         if limit < 2 { return false; }
@@ -565,6 +580,16 @@ pub fn attempt_prompt(goal: &str, attempt: usize, max: usize, previous: &[String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn governor_limita_ciclos_por_hora_y_presupuesto_total() {
+        let goal = GoalState::new();
+        goal.start("presupuesto").unwrap();
+        goal.record_attempt("ciclo 1").unwrap();
+        assert!(goal.budget_limit(1, 100).is_some());
+        assert!(goal.budget_limit(10, 1).is_some());
+        assert!(goal.budget_limit(10, 100).is_none());
+    }
 
     #[test]
     fn pausa_por_estancamiento_y_reanudacion_explicita() {
