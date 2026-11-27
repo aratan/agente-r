@@ -216,6 +216,7 @@ impl ToolRegistry {
         // Solo el agente raíz puede cerrar el objetivo global. Un subagente
         // entrega evidencias a su padre, pero no puede finalizar la misión.
         if depth == 0 {
+            reg.add(GoalPlanTool { goal: orch.goal.clone() });
             reg.add(GoalDoneTool {
                 goal: orch.goal.clone(),
             });
@@ -1494,6 +1495,73 @@ impl Tool for ScheduleRemoveTool {
             Ok(format!("tarea {id} eliminada"))
         } else {
             Ok(format!("no existe la tarea {id}"))
+        }
+    }
+}
+
+struct GoalPlanTool {
+    goal: Arc<crate::goals::GoalState>,
+}
+
+impl Tool for GoalPlanTool {
+    fn name(&self) -> &str { "goal_task" }
+    fn description(&self) -> &str {
+        "Gestiona el plan persistente del objetivo raíz. Usa action=add/update para definir tareas y dependencias; start para iniciar una tarea; complete para cerrarla con evidencia; list para consultar el plan. Solo el agente raíz puede usarlo."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["add", "update", "start", "complete", "list"]},
+                "id": {"type": "string"},
+                "title": {"type": "string"},
+                "depends_on": {"type": "array", "items": {"type": "string"}},
+                "evidence": {"type": "string"}
+            },
+            "required": ["action"]
+        })
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        use crate::goals::TaskStatus;
+        let action = req_str(args, "action")?;
+        match action.as_str() {
+            "add" | "update" => {
+                let id = req_str(args, "id")?;
+                let title = req_str(args, "title")?;
+                let deps = args.get("depends_on").and_then(Value::as_array)
+                    .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if args.get("depends_on").is_some_and(|v| !v.is_array()) {
+                    bail!("depends_on debe ser un array de strings");
+                }
+                self.goal.upsert_task(&id, &title, &deps)?;
+                Ok(format!("Tarea {id} guardada en el plan persistente."))
+            }
+            "start" => {
+                let id = req_str(args, "id")?;
+                self.goal.set_task_status(&id, TaskStatus::InProgress, None)?;
+                Ok(format!("Tarea {id} iniciada."))
+            }
+            "complete" => {
+                let id = req_str(args, "id")?;
+                let evidence = req_str(args, "evidence")?;
+                self.goal.set_task_status(&id, TaskStatus::Completed, Some(&evidence))?;
+                Ok(format!("Tarea {id} completada con evidencia registrada."))
+            }
+            "list" => {
+                let tasks = self.goal.tasks();
+                if tasks.is_empty() { return Ok("El plan todavía no contiene tareas.".into()); }
+                let mut out = String::new();
+                for task in tasks {
+                    out.push_str(&format!("- {} [{:?}] {} · depende de: {} · evidencia: {}\\n",
+                        task.id, task.status, task.title,
+                        if task.depends_on.is_empty() { "ninguna".to_string() } else { task.depends_on.join(", ") },
+                        task.evidence.unwrap_or_else(|| "pendiente".into())
+                    ));
+                }
+                Ok(out)
+            }
+            _ => bail!("acción desconocida para goal_task: {action}"),
         }
     }
 }
