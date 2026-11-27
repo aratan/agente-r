@@ -185,10 +185,12 @@ impl GoalState {
             }
         }
         if let Some(cycle_number) = record.active_cycle.take() {
-            if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number) {
-                cycle.interrupted = true;
-                cycle.finished_at = Some(now());
-            }
+            record.cycles.iter_mut()
+                .find(|cycle| cycle.number == cycle_number)
+                .map(|cycle| {
+                    cycle.interrupted = true;
+                    cycle.finished_at = Some(now());
+                });
             recovered += 1;
         }
         if recovered > 0 {
@@ -658,10 +660,10 @@ impl GoalState {
             }
             record.evidence = Some(evidence.to_string());
             record.status = GoalStatus::Completed;
-            if let Some(cycle_number) = record.active_cycle.take() {
-                if let Some(cycle) = record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number) {
-                    cycle.finished_at = Some(now());
-                }
+            if let Some(cycle) = record.active_cycle.take().and_then(|cycle_number| {
+                record.cycles.iter_mut().find(|cycle| cycle.number == cycle_number)
+            }) {
+                cycle.finished_at = Some(now());
             }
             record.updated_at = now();
         }
