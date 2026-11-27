@@ -204,7 +204,14 @@ impl Tool for GuiTool {
                     need("xdotool", "sudo apt install xdotool")?;
                     run_bin(
                         "xdotool",
-                        &["search", "--onlyvisible", "--name", "", "getwindowname", "%@"],
+                        &[
+                            "search",
+                            "--onlyvisible",
+                            "--name",
+                            "",
+                            "getwindowname",
+                            "%@",
+                        ],
                     )
                 }
             }
@@ -238,7 +245,10 @@ impl Tool for GuiTool {
                     .as_str()
                     .ok_or_else(|| anyhow!("action=type necesita `text`"))?;
                 need("xdotool", "sudo apt install xdotool")?;
-                run_bin("xdotool", &["type", "--clearmodifiers", "--delay", "30", text])
+                run_bin(
+                    "xdotool",
+                    &["type", "--clearmodifiers", "--delay", "30", text],
+                )
             }
             "key" => {
                 let keys = args["keys"]
@@ -272,8 +282,16 @@ impl Tool for GuiTool {
                     run_bin(
                         "ffmpeg",
                         &[
-                            "-loglevel", "error", "-y", "-f", "x11grab", "-i",
-                            &format!("{display}.0"), "-frames:v", "1", &path_text,
+                            "-loglevel",
+                            "error",
+                            "-y",
+                            "-f",
+                            "x11grab",
+                            "-i",
+                            &format!("{display}.0"),
+                            "-frames:v",
+                            "1",
+                            &path_text,
                         ],
                     )?;
                 } else {
@@ -315,7 +333,10 @@ impl Tool for MailTool {
     }
     fn run(&self, args: &Value) -> Result<String> {
         let action = args["action"].as_str().unwrap_or("list");
-        need("himalaya", "instala himalaya (`cargo install himalaya`) y configura ~/.config/himalaya/config.toml")?;
+        need(
+            "himalaya",
+            "instala himalaya (`cargo install himalaya`) y configura ~/.config/himalaya/config.toml",
+        )?;
         match action {
             "folders" => run_bin("himalaya", &["folder", "list"]),
             "list" => {
@@ -388,7 +409,14 @@ pub fn telegram_token() -> Result<String> {
 fn telegram_call(token: &str, method: &str, params: &[(&str, String)]) -> Result<Value> {
     need("curl", "instala curl para hablar con la API de Telegram")?;
     let url = format!("https://api.telegram.org/bot{token}/{method}");
-    let mut args: Vec<String> = vec!["-s".into(), "-m".into(), "40".into(), "-X".into(), "POST".into(), url];
+    let mut args: Vec<String> = vec![
+        "-s".into(),
+        "-m".into(),
+        "40".into(),
+        "-X".into(),
+        "POST".into(),
+        url,
+    ];
     for (key, value) in params {
         args.push("--data-urlencode".into());
         args.push(format!("{key}={value}"));
@@ -413,10 +441,7 @@ pub fn telegram_send(token: &str, chat: i64, text: &str) -> Result<()> {
     telegram_call(
         token,
         "sendMessage",
-        &[
-            ("chat_id", chat.to_string()),
-            ("text", clip(text, 4000)),
-        ],
+        &[("chat_id", chat.to_string()), ("text", clip(text, 4000))],
     )?;
     Ok(())
 }
@@ -624,11 +649,7 @@ pub fn voice_say(text: &str) -> Result<()> {
     }
     if which("espeak-ng").is_some() {
         // Voz femenina en español (variante 3 es la más natural de espeak).
-        return run_bin(
-            "espeak-ng",
-            &["-v", "es+f3", "-s", "165", "-p", "60", text],
-        )
-        .map(|_| ());
+        return run_bin("espeak-ng", &["-v", "es+f3", "-s", "165", "-p", "60", text]).map(|_| ());
     }
     bail!(
         "no hay TTS instalado: instala piper (`pip install piper-tts`) con una voz es_ES femenina \
@@ -638,15 +659,27 @@ pub fn voice_say(text: &str) -> Result<()> {
 
 /// Micrófono → texto con whisper.cpp (o OpenAI whisper si está instalado).
 pub fn voice_listen(seconds: u64) -> Result<String> {
-    need("arecord", "instala alsa-utils (`sudo apt install alsa-utils`)")?;
+    need(
+        "arecord",
+        "instala alsa-utils (`sudo apt install alsa-utils`)",
+    )?;
     let wav = std::env::temp_dir().join(format!("agent-stt-{}.wav", std::process::id()));
     let wav_text = wav.display().to_string();
     let secs = seconds.clamp(1, 60).to_string();
-    run_bin("arecord", &["-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", &secs, "-t", "wav", &wav_text])?;
+    run_bin(
+        "arecord",
+        &[
+            "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", &secs, "-t", "wav", &wav_text,
+        ],
+    )?;
 
     let model = find_model(
         "AGENT_WHISPER_MODEL",
-        &["models/whisper", ".local/share/whisper", "/usr/share/whisper"],
+        &[
+            "models/whisper",
+            ".local/share/whisper",
+            "/usr/share/whisper",
+        ],
         "bin",
     );
 
@@ -669,7 +702,15 @@ pub fn voice_listen(seconds: u64) -> Result<String> {
     } else if which("whisper").is_some() {
         run_bin(
             "whisper",
-            &[&wav_text, "--model", "base", "--language", "es", "--output_format", "txt"],
+            &[
+                &wav_text,
+                "--model",
+                "base",
+                "--language",
+                "es",
+                "--output_format",
+                "txt",
+            ],
         )?
     } else {
         bail!(

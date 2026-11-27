@@ -213,9 +213,23 @@ impl ToolRegistry {
             state: web_state.clone(),
             ws: ws.clone(),
         });
-        reg.add(GoalDoneTool {
-            goal: orch.goal.clone(),
-        });
+        // Solo el agente raíz puede cerrar el objetivo global. Un subagente
+        // entrega evidencias a su padre, pero no puede finalizar la misión.
+        if depth == 0 {
+            reg.add(GoalPlanTool {
+                goal: orch.goal.clone(),
+            });
+            reg.add(GoalFailureTool {
+                goal: orch.goal.clone(),
+            });
+            reg.add(GoalVerifyTool {
+                goal: orch.goal.clone(),
+                ws: ws.clone(),
+            });
+            reg.add(GoalDoneTool {
+                goal: orch.goal.clone(),
+            });
+        }
         reg.add(MediaTool);
         reg.add(TelegramTool);
         reg.add(VoiceTool);
@@ -301,7 +315,10 @@ impl ToolRegistry {
             memory: memory.clone(),
             embedder: embedder.clone(),
         });
-        reg.add(MemorySearchTool { memory: memory.clone(), embedder });
+        reg.add(MemorySearchTool {
+            memory: memory.clone(),
+            embedder,
+        });
         reg.add(MemoryListTool { memory });
         reg
     }
@@ -328,10 +345,7 @@ fn req_str(args: &Value, key: &str) -> Result<String> {
 }
 
 fn usize_arg(args: &Value, key: &str, default: usize) -> usize {
-    args[key]
-        .as_u64()
-        .map(|v| v as usize)
-        .unwrap_or(default)
+    args[key].as_u64().map(|v| v as usize).unwrap_or(default)
 }
 
 fn tags_arg(args: &Value) -> Vec<String> {
@@ -364,7 +378,9 @@ fn with_browser<T>(
     ws: &Workspace,
     f: impl FnOnce(&mut Browser) -> Result<T>,
 ) -> Result<T> {
-    let mut guard = slot.lock().map_err(|_| anyhow!("navegador: lock envenenado"))?;
+    let mut guard = slot
+        .lock()
+        .map_err(|_| anyhow!("navegador: lock envenenado"))?;
     if guard.is_none() {
         let profile = ws.root().join(".agent-browser");
         *guard = Some(Browser::new(browser_port(), profile));
@@ -544,10 +560,18 @@ impl Tool for FsWriteTool {
                 .append(true)
                 .open(&path)?;
             file.write_all(content.as_bytes())?;
-            Ok(format!("añadidos {} bytes a {}", content.len(), self.ws.rel(&path)))
+            Ok(format!(
+                "añadidos {} bytes a {}",
+                content.len(),
+                self.ws.rel(&path)
+            ))
         } else {
             std::fs::write(&path, content)?;
-            Ok(format!("escritos {} bytes en {}", content.len(), self.ws.rel(&path)))
+            Ok(format!(
+                "escritos {} bytes en {}",
+                content.len(),
+                self.ws.rel(&path)
+            ))
         }
     }
 }
@@ -570,7 +594,9 @@ impl Tool for FsListTool {
         })
     }
     fn run(&self, args: &Value) -> Result<String> {
-        let path = self.ws.resolve(str_arg(args, "path").unwrap_or_else(|| ".".into()).as_str())?;
+        let path = self
+            .ws
+            .resolve(str_arg(args, "path").unwrap_or_else(|| ".".into()).as_str())?;
         let mut rows = Vec::new();
         for entry in std::fs::read_dir(&path)
             .with_context(|| format!("no se pudo listar {}", self.ws.rel(&path)))?
@@ -737,7 +763,10 @@ impl Tool for WebSearchTool {
         };
 
         {
-            let mut state = self.state.lock().map_err(|_| anyhow!("web: lock envenenado"))?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| anyhow!("web: lock envenenado"))?;
             if let Some(hits) = state.cached(&query) {
                 return Ok(format!(
                     "[caché] {}",
@@ -827,7 +856,10 @@ impl Tool for MemorySaveTool {
             Some(embedder) => embedder.embed(&text).unwrap_or_default(),
             None => Vec::new(),
         };
-        let mut memory = self.memory.lock().map_err(|_| anyhow!("memoria: lock envenenado"))?;
+        let mut memory = self
+            .memory
+            .lock()
+            .map_err(|_| anyhow!("memoria: lock envenenado"))?;
         memory.remember(
             &kind,
             &text,
@@ -870,7 +902,10 @@ impl Tool for MemorySearchTool {
             Some(embedder) => embedder.embed(&query).ok(),
             None => None,
         };
-        let memory = self.memory.lock().map_err(|_| anyhow!("memoria: lock envenenado"))?;
+        let memory = self
+            .memory
+            .lock()
+            .map_err(|_| anyhow!("memoria: lock envenenado"))?;
         let hits = memory.search(&query, kind.as_deref(), limit, qvec.as_deref());
         if hits.is_empty() {
             return Ok("Sin resultados en memoria.".to_string());
@@ -915,7 +950,10 @@ impl Tool for MemoryListTool {
     fn run(&self, args: &Value) -> Result<String> {
         let limit = usize_arg(args, "limit", 15).clamp(1, 100);
         let kind = str_arg(args, "kind");
-        let memory = self.memory.lock().map_err(|_| anyhow!("memoria: lock envenenado"))?;
+        let memory = self
+            .memory
+            .lock()
+            .map_err(|_| anyhow!("memoria: lock envenenado"))?;
         let entries = memory.list(kind.as_deref(), limit);
         if entries.is_empty() {
             return Ok("Memoria vacía.".to_string());
@@ -952,7 +990,10 @@ impl Tool for MemoryForgetTool {
     }
     fn run(&self, args: &Value) -> Result<String> {
         let id = req_str(args, "id")?;
-        let mut memory = self.memory.lock().map_err(|_| anyhow!("memoria: lock envenenado"))?;
+        let mut memory = self
+            .memory
+            .lock()
+            .map_err(|_| anyhow!("memoria: lock envenenado"))?;
         if memory.forget(&id)? {
             Ok(format!("olvidado: {id}"))
         } else {
@@ -982,7 +1023,10 @@ impl Tool for MemoryFeedbackTool {
     fn run(&self, args: &Value) -> Result<String> {
         let id = req_str(args, "id")?;
         let useful = args["useful"].as_bool().unwrap_or(true);
-        let mut memory = self.memory.lock().map_err(|_| anyhow!("memoria: lock envenenado"))?;
+        let mut memory = self
+            .memory
+            .lock()
+            .map_err(|_| anyhow!("memoria: lock envenenado"))?;
         if memory.feedback(&id, useful)? {
             Ok(format!("feedback aplicado a {id} (useful={useful})"))
         } else {
@@ -1068,7 +1112,10 @@ impl Tool for RagIndexTool {
                 chunks_total += 1;
             }
         }
-        let memory = self.memory.lock().map_err(|_| anyhow!("memoria: lock envenenado"))?;
+        let memory = self
+            .memory
+            .lock()
+            .map_err(|_| anyhow!("memoria: lock envenenado"))?;
         Ok(format!(
             "indexados {chunks_total} fragmentos de {files_ok} ficheros (memoria total: {})",
             memory.len()
@@ -1095,7 +1142,11 @@ fn collect_files(start: &Path, out: &mut Vec<PathBuf>, max: usize) {
         if out.len() >= max {
             return;
         }
-        let name = child.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = child
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         if name.starts_with('.') || name == "node_modules" || name == "target" {
             continue;
         }
@@ -1168,7 +1219,10 @@ impl Tool for DelegateTool {
         let out = self
             .orch
             .spawn(self.depth + 1, &role, &goal, &context, self.mandate.split())?;
-        Ok(format!("[subagente {role} · nivel {}]\n{out}", self.depth + 1))
+        Ok(format!(
+            "[subagente {role} · nivel {}]\n{out}",
+            self.depth + 1
+        ))
     }
 }
 
@@ -1365,7 +1419,9 @@ impl Tool for ModelPullTool {
     fn run(&self, args: &Value) -> Result<String> {
         let name = req_str(args, "name")?;
         if self.orch.backend.kind != Kind::Ollama {
-            bail!("las descargas solo se gestionan con Ollama; en llama.cpp los GGUF se colocan a mano");
+            bail!(
+                "las descargas solo se gestionan con Ollama; en llama.cpp los GGUF se colocan a mano"
+            );
         }
         if self.orch.models.iter().any(|m| m.id == name) {
             return Ok(format!("'{name}' ya está instalado"));
@@ -1494,6 +1550,275 @@ impl Tool for ScheduleRemoveTool {
     }
 }
 
+struct GoalPlanTool {
+    goal: Arc<crate::goals::GoalState>,
+}
+
+impl Tool for GoalPlanTool {
+    fn name(&self) -> &str {
+        "goal_task"
+    }
+    fn description(&self) -> &str {
+        "Gestiona el plan persistente del objetivo raíz. Usa action=add/update para definir tareas, dependencias y checks de aceptación permitidos; start para iniciar; complete para aportar evidencia; list para consultar. Después ejecuta goal_verify. Solo el agente raíz puede usarlo."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["add", "update", "start", "complete", "list"]},
+                "id": {"type": "string"},
+                "title": {"type": "string"},
+                "depends_on": {"type": "array", "items": {"type": "string"}},
+                "checks": {"type": "array", "items": {"type": "string"}, "description": "Comandos exactos de aceptación de la lista permitida; obligatorios para verificar la tarea."},
+                "evidence": {"type": "string"}
+            },
+            "required": ["action"]
+        })
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        use crate::goals::TaskStatus;
+        let action = req_str(args, "action")?;
+        match action.as_str() {
+            "add" | "update" => {
+                let id = req_str(args, "id")?;
+                let title = req_str(args, "title")?;
+                let current = self.goal.tasks().into_iter().find(|task| task.id == id);
+                let deps = if let Some(value) = args.get("depends_on") {
+                    let items = value
+                        .as_array()
+                        .ok_or_else(|| anyhow!("depends_on debe ser un array de strings"))?;
+                    items
+                        .iter()
+                        .map(|item| {
+                            item.as_str()
+                                .map(str::to_string)
+                                .ok_or_else(|| anyhow!("cada dependencia debe ser un string"))
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    current
+                        .as_ref()
+                        .map(|task| task.depends_on.clone())
+                        .unwrap_or_default()
+                };
+                let checks = if let Some(value) = args.get("checks") {
+                    let items = value
+                        .as_array()
+                        .ok_or_else(|| anyhow!("checks debe ser un array de strings"))?;
+                    items
+                        .iter()
+                        .map(|item| {
+                            item.as_str()
+                                .map(str::to_string)
+                                .ok_or_else(|| anyhow!("cada check debe ser un string"))
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    current.map(|task| task.checks).unwrap_or_default()
+                };
+                self.goal.upsert_task(&id, &title, &deps, &checks)?;
+                Ok(format!("Tarea {id} guardada en el plan persistente."))
+            }
+            "start" => {
+                let id = req_str(args, "id")?;
+                self.goal
+                    .set_task_status(&id, TaskStatus::InProgress, None)?;
+                Ok(format!("Tarea {id} iniciada."))
+            }
+            "complete" => {
+                let id = req_str(args, "id")?;
+                let evidence = req_str(args, "evidence")?;
+                self.goal
+                    .set_task_status(&id, TaskStatus::Completed, Some(&evidence))?;
+                Ok(format!("Tarea {id} completada con evidencia registrada."))
+            }
+            "list" => {
+                let tasks = self.goal.tasks();
+                if tasks.is_empty() {
+                    return Ok("El plan todavía no contiene tareas.".into());
+                }
+                let mut out = String::new();
+                for task in tasks {
+                    out.push_str(&format!("- {} [{:?}] {} · depende de: {} · checks: {} · verificada: {} · evidencia: {}",
+                        task.id, task.status, task.title,
+                        if task.depends_on.is_empty() { "ninguna".to_string() } else { task.depends_on.join(", ") },
+                        if task.checks.is_empty() { "ninguno".to_string() } else { task.checks.join(", ") },
+                        task.verified,
+                        task.evidence.unwrap_or_else(|| "pendiente".into())
+                    ));
+                    out.push('\n');
+                }
+                Ok(out)
+            }
+            _ => bail!("acción desconocida para goal_task: {action}"),
+        }
+    }
+}
+
+struct GoalFailureTool {
+    goal: Arc<crate::goals::GoalState>,
+}
+
+impl Tool for GoalFailureTool {
+    fn name(&self) -> &str {
+        "goal_failure"
+    }
+    fn description(&self) -> &str {
+        "Registra un fallo, su síntoma y la estrategia intentada en el diario persistente. Debe llamarse antes de reintentar. Repetir el mismo fingerprint y estrategia se bloquea salvo que condition_changed=true y se explique el cambio."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "fingerprint": {"type": "string"},
+                "category": {"type": "string"},
+                "symptom": {"type": "string"},
+                "strategy": {"type": "string"},
+                "condition_changed": {"type": "boolean"}
+            },
+            "required": ["fingerprint", "category", "symptom", "strategy", "condition_changed"]
+        })
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let fingerprint = req_str(args, "fingerprint")?;
+        let category = req_str(args, "category")?;
+        let symptom = req_str(args, "symptom")?;
+        let strategy = req_str(args, "strategy")?;
+        let condition_changed = args
+            .get("condition_changed")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| anyhow!("condition_changed debe ser boolean"))?;
+        self.goal.record_failure(
+            &fingerprint,
+            &category,
+            &symptom,
+            &strategy,
+            condition_changed,
+        )?;
+        Ok(format!(
+            "Fallo registrado: {fingerprint}. La estrategia queda en el diario persistente."
+        ))
+    }
+}
+
+struct GoalVerifyTool {
+    goal: Arc<crate::goals::GoalState>,
+    ws: Workspace,
+}
+
+impl Tool for GoalVerifyTool {
+    fn name(&self) -> &str {
+        "goal_verify"
+    }
+    fn description(&self) -> &str {
+        "Evaluador determinista separado del agente ejecutor. Ejecuta los checks de aceptación predefinidos de cada tarea completada; solo marca verified si todos los comandos permitidos terminan con exit 0. No acepta evidencias textuales como sustituto de ejecutar checks."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {"id": {"type": "string", "description": "ID de tarea; si se omite, evalúa todas las tareas completadas"}},
+        })
+    }
+    fn run(&self, args: &Value) -> Result<String> {
+        let tasks = self.goal.tasks();
+        if tasks.is_empty() {
+            bail!("no hay tareas que evaluar");
+        }
+        let selected = if let Some(id) = str_arg(args, "id") {
+            tasks
+                .into_iter()
+                .filter(|task| task.id == id)
+                .collect::<Vec<_>>()
+        } else {
+            tasks
+                .into_iter()
+                .filter(|task| task.status == crate::goals::TaskStatus::Completed)
+                .collect::<Vec<_>>()
+        };
+        if selected.is_empty() {
+            bail!("no hay tareas completadas que evaluar");
+        }
+        let mut report = String::new();
+        let mut failures = 0usize;
+        for task in selected {
+            if task.status != crate::goals::TaskStatus::Completed {
+                failures += 1;
+                report.push_str(&format!("- {}: FAIL; tarea no completada\n", task.id));
+                continue;
+            }
+            if task.checks.is_empty() {
+                self.goal.set_task_verification(
+                    &task.id,
+                    false,
+                    "la tarea no define checks ejecutables",
+                )?;
+                failures += 1;
+                report.push_str(&format!(
+                    "- {}: FAIL; faltan checks de aceptación\n",
+                    task.id
+                ));
+                continue;
+            }
+            let mut output = String::new();
+            let mut passed = true;
+            for check in &task.checks {
+                let Some(command) = verification_command(check) else {
+                    passed = false;
+                    output.push_str(&format!("check no permitido: {check}\n"));
+                    break;
+                };
+                let result = run_command(command, self.ws.root(), Duration::from_secs(600))?;
+                let failed = result.contains("[exit ") || result.contains("[timeout");
+                output.push_str(&format!("$ {command}\n{result}\n"));
+                if failed {
+                    passed = false;
+                    break;
+                }
+            }
+            self.goal.set_task_verification(&task.id, passed, &output)?;
+            if passed {
+                report.push_str(&format!(
+                    "- {}: PASS; checks ejecutados y exit 0\n",
+                    task.id
+                ));
+            } else {
+                failures += 1;
+                report.push_str(&format!(
+                    "- {}: FAIL; revisar salida y corregir antes de reintentar\n",
+                    task.id
+                ));
+            }
+        }
+        if failures > 0 {
+            report.push_str(&format!(
+                "Evaluación no superada: {failures} tarea(s) fallaron."
+            ));
+        } else {
+            report.push_str(
+                "Evaluación superada: todos los checks ejecutados terminaron correctamente.",
+            );
+        }
+        Ok(report)
+    }
+}
+
+fn verification_command(check: &str) -> Option<&'static str> {
+    match check.trim() {
+        "cargo test" => Some("cargo test --locked"),
+        "cargo clippy" => Some("cargo clippy --locked --all-targets -- -D warnings"),
+        "cargo check" => Some("cargo check --locked"),
+        "cargo fmt --check" => Some("cargo fmt --all -- --check"),
+        "git diff --check" => Some("git diff --check"),
+        "npm test" => Some("npm test"),
+        "npm run test" => Some("npm run test"),
+        "pytest" => Some("pytest"),
+        "python -m pytest" => Some("python -m pytest"),
+        "go test" => Some("go test ./..."),
+        "make test" => Some("make test"),
+        _ => None,
+    }
+}
+
 struct GoalDoneTool {
     goal: Arc<crate::goals::GoalState>,
 }
@@ -1554,10 +1879,26 @@ mod tests {
 
     #[test]
     fn trocea_texto_con_solape() {
-        let text: String = (0..100).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let text: String = (0..100)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
         let chunks = chunk_text(&text, 40, 10);
         assert!(chunks.len() >= 3);
         assert!(chunks.iter().all(|c| c.chars().count() <= 40));
+    }
+
+    #[test]
+    fn evaluador_rechaza_comandos_fuera_de_la_lista_permitida() {
+        assert_eq!(
+            verification_command("cargo test"),
+            Some("cargo test --locked")
+        );
+        assert_eq!(
+            verification_command("cargo clippy"),
+            Some("cargo clippy --locked --all-targets -- -D warnings")
+        );
+        assert_eq!(verification_command("rm -rf /"), None);
+        assert_eq!(verification_command("cargo test; touch /tmp/pwned"), None);
     }
 
     #[test]

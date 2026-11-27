@@ -1,6 +1,9 @@
 name: CI
 
-on: push
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,6 +20,9 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --check
 
       - name: Tests
         run: cargo test --locked

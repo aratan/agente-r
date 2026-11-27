@@ -143,7 +143,10 @@ fn read_ram_gb() -> Option<f64> {
 
 fn read_gpu() -> (Option<String>, Option<f64>) {
     let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output();
     let Ok(output) = output else {
         return (None, None);

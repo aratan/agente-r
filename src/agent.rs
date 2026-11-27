@@ -127,9 +127,34 @@ impl Agent {
             fresh_from = msgs.len();
 
             for call in &turn.calls {
+                // Journal-before-effect: si el proceso cae tras la herramienta,
+                // el reinicio encontrará la operación como resultado desconocido.
+                let operation_id = match &self.opts.goal {
+                    Some(goal) => goal.begin_operation(&call.name, &call.args)?,
+                    None => None,
+                };
                 let out = match self.tools.run(&call.name, &call.args) {
-                    Ok(text) => text,
-                    Err(err) => format!("ERROR: {err:#}"),
+                    Ok(text) => {
+                        if let (Some(goal), Some(id)) = (&self.opts.goal, operation_id.as_deref()) {
+                            goal.finish_operation(
+                                id,
+                                true,
+                                "ejecución completada; salida no duplicada en el journal",
+                            )?;
+                        }
+                        text
+                    }
+                    Err(err) => {
+                        let message = format!("ERROR: {err:#}");
+                        if let (Some(goal), Some(id)) = (&self.opts.goal, operation_id.as_deref()) {
+                            goal.finish_operation(
+                                id,
+                                false,
+                                "la herramienta devolvió error; consulta la traza del ciclo",
+                            )?;
+                        }
+                        message
+                    }
                 };
                 eprintln!("     ↳ {}", memory::truncate(&out, 180));
                 msgs.push(Msg::Tool {
@@ -174,33 +199,101 @@ impl Agent {
         Ok(answer)
     }
 
-    /// Insiste en una meta hasta cumplirla o agotar intentos.
+    /// Ejecuta un presupuesto de ciclos y conserva el progreso entre procesos.
+    /// Repetir el mismo objetivo reanuda el historial; uno distinto no desplaza
+    /// silenciosamente una meta que siga activa.
     pub fn pursue(&mut self, goal: &str, max_attempts: usize) -> Result<String> {
         let max = max_attempts.max(1);
-        if let Some(state) = &self.opts.goal {
-            state.reset();
+        let state = self.opts.goal.clone();
+        if let Some(state) = &state {
+            state.start(goal)?;
+            if state.is_done() {
+                return Ok(format!(
+                    "El objetivo ya estaba completado. Evidencia: {}",
+                    state.evidence().unwrap_or_default()
+                ));
+            }
         }
-        let mut previous: Vec<String> = Vec::new();
+
         let mut last = String::new();
-        for attempt in 1..=max {
+        for cycle in 1..=max {
+            if let Some(state) = &state {
+                let max_per_hour = std::env::var("AGENT_GOAL_MAX_CYCLES_PER_HOUR")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(120)
+                    .clamp(1, 500);
+                let max_total = std::env::var("AGENT_GOAL_MAX_CYCLES_TOTAL")
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(50_000)
+                    .max(1);
+                if let Some(reason) = state.budget_limit(max_per_hour, max_total) {
+                    state.pause(&reason)?;
+                    return Err(anyhow::anyhow!(
+                        "objetivo pausado por presupuesto: {reason}"
+                    ));
+                }
+            }
+            let previous = state
+                .as_ref()
+                .map(|g| g.previous_summaries(8))
+                .unwrap_or_default();
+            let attempt = state
+                .as_ref()
+                .map(|g| g.attempts() as usize + 1)
+                .unwrap_or(cycle);
             eprintln!(
-                "\n── meta · intento {attempt}/{max} · {} ",
+                "\n── objetivo · ciclo {attempt} · presupuesto local {cycle}/{max} · {}",
                 memory::truncate(goal, 80)
             );
-            let prompt = goals::attempt_prompt(goal, attempt, max, &previous);
-            last = self.run(&prompt)?;
-            if self.opts.goal.as_ref().map(|g| g.is_done()).unwrap_or(false) {
+            let mut prompt = goals::attempt_prompt(goal, attempt, max, &previous);
+            if let Some(state) = &state {
+                prompt.push('\n');
+                prompt.push_str(&state.plan_prompt());
+                prompt.push_str(&state.failure_prompt(8));
+                prompt.push_str(&state.recovery_prompt(20));
+            }
+            if let Some(state) = &state {
+                // El checkpoint existe antes de la llamada al modelo, incluso si
+                // el proceso termina durante la inferencia.
+                state.begin_cycle()?;
+            }
+            last = match self.run(&prompt) {
+                Ok(answer) => answer,
+                Err(err) => {
+                    if let Some(state) = &state {
+                        state.record_attempt(&format!("ERROR de ejecución: {err:#}"))?;
+                        if state.repeated_attempts(3) {
+                            state.pause(
+                                "tres ciclos consecutivos con el mismo error de ejecución",
+                            )?;
+                        }
+                    }
+                    return Err(err);
+                }
+            };
+
+            if state.as_ref().map(|g| g.is_done()).unwrap_or(false) {
                 eprintln!(
-                    "✓ meta cumplida (intento {attempt}) · evidencia: {}",
-                    self.opts
-                        .goal
+                    "✓ objetivo completado · evidencia: {}",
+                    state
                         .as_ref()
                         .and_then(|g| g.evidence())
                         .unwrap_or_default()
                 );
                 return Ok(last);
             }
-            previous.push(memory::truncate(&last, 240));
+
+            if let Some(state) = &state {
+                state.record_attempt(&last)?;
+                if state.repeated_attempts(3) {
+                    state.pause("tres ciclos consecutivos sin progreso: respuesta idéntica")?;
+                    return Err(anyhow::anyhow!(
+                        "objetivo pausado por estancamiento; revisa el diario y reanuda explícitamente con el mismo --goal cuando cambies la estrategia"
+                    ));
+                }
+            }
         }
         Ok(last)
     }
@@ -443,14 +536,10 @@ mod tests {
         ];
         // Recién leído (índice >= keep_from): se conserva hasta que el modelo lo vea.
         prune_skill_context(&mut msgs, 1);
-        assert!(
-            matches!(&msgs[1], Msg::Tool { content, .. } if content == "PASOS LARGOS")
-        );
+        assert!(matches!(&msgs[1], Msg::Tool { content, .. } if content == "PASOS LARGOS"));
         // Ya visto: se libera del contexto.
         prune_skill_context(&mut msgs, 3);
-        assert!(
-            matches!(&msgs[1], Msg::Tool { content, .. } if content.starts_with("[liberado]"))
-        );
+        assert!(matches!(&msgs[1], Msg::Tool { content, .. } if content.starts_with("[liberado]")));
         // Las demás herramientas no se tocan.
         let mut otros = vec![Msg::Tool {
             id: "2".into(),

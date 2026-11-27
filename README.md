@@ -80,10 +80,56 @@ y hacerlo sin supervisión sería irresponsable. Las mejoras son datos, no códi
 - **Máximo 3 descargas de modelos por proyecto**, con registro persistente en
   `.agent/models.json` y validación antes de descargar (`--pull`, `model_pull`).
 
-### Metas que insiste (`/goal`, `--goal`)
-- Hasta `--goal-attempts` intentos (8). Cada intento recibe los resúmenes anteriores y la
-  orden de **cambiar de estrategia**; el último pide explicar qué falta.
-- Solo se cierra con `goal_done` y **evidencia obligatoria**; sin evidencia se rechaza.
+### Objetivo persistente y ejecución prolongada (`/goal`, `--goal`, `--daemon`)
+- El objetivo raíz y el historial de ciclos se guardan en `.agent/goal.json`; repetir el
+  mismo `--goal` reanuda el estado, no lo reinicia. Un objetivo activo impide sustituirlo
+  silenciosamente por otro.
+- `--goal-attempts` define el tamaño de cada lote de trabajo, no el límite total de la misión.
+- `--goal "objetivo" --daemon` inicia y persigue el objetivo en lotes sucesivos; el daemon
+  también reanuda un objetivo activo al reiniciarse. Los resultados se anexan a
+  `.agent/runs/goal.log`.
+- `--daemon-once` ejecuta un lote y sale; `--daemon` mantiene el proceso vivo.
+- Supervisor de usuario systemd disponible en `contrib/systemd/local-agent-goal.service`.
+  Ajusta la ruta del binario y workspace; después instala con:
+  `mkdir -p ~/.config/systemd/user && cp contrib/systemd/local-agent-goal.service ~/.config/systemd/user/`
+  `systemctl --user daemon-reload && systemctl --user enable --now local-agent-goal.service`.
+  Para mantenerlo activo tras cerrar sesión y arrancarlo al iniciar el equipo:
+  `loginctl enable-linger "$USER"` (puede requerir autorización del sistema).
+  Consulta el estado con `systemctl --user status local-agent-goal.service` y logs con
+  `journalctl --user -u local-agent-goal.service -f`.
+- El daemon adquiere un bloqueo exclusivo del workspace (`.agent/daemon.lock`) mediante `flock`; una segunda instancia falla sin tocar el objetivo. El kernel libera el bloqueo al morir el proceso, por lo que no quedan locks obsoletos tras un crash.
+- Los resúmenes de los últimos 500 ciclos se conservan para continuidad; el contador total
+  es acumulativo. Se archivan hasta 100 objetivos completados.
+- Solo el agente raíz puede cerrar el objetivo global mediante `goal_done`. Los subagentes
+  devuelven resultados al agente raíz.
+- El agente raíz dispone de `goal_task` para crear/actualizar tareas, dependencias y checks
+  de aceptación, iniciar tareas, aportar evidencia y consultar el plan. El grafo se guarda en
+  `.agent/goal.json`; rechaza dependencias inexistentes/cíclicas y no permite saltárselas.
+- `goal_verify` es un evaluador determinista separado: ejecuta checks exactos de una lista
+  permitida (cargo test/clippy/check/fmt, git diff --check, pytest, npm test, go test y make test).
+  Una tarea no queda verificada por una declaración textual; los checks deben terminar con exit 0.
+  Cambiar el título, las dependencias o los checks invalida la verificación anterior.
+- `goal_done` no permite cerrar el objetivo mientras haya tareas pendientes, en curso o no verificadas.
+- Cada ciclo recibe el plan y el diario de fallos para reanudar el trabajo tras una interrupción.
+- El governor pausa el objetivo tras tres resultados consecutivos idénticos (incluidos errores
+  del proveedor), registra el motivo y evita quemar ciclos sin progreso. Para reanudar, vuelve
+  a pasar el mismo objetivo con `--goal`; un objetivo pausado no se sustituye por otro.
+- Presupuesto por defecto: 120 ciclos por hora y 50.000 ciclos acumulados por objetivo.
+  Ajustable con `AGENT_GOAL_MAX_CYCLES_PER_HOUR` y `AGENT_GOAL_MAX_CYCLES_TOTAL`; al
+  agotarse, el objetivo se pausa y solo se reanuda explícitamente tras revisar el consumo.
+- ### Ensayo prolongado de persistencia (manual)
+- Ejecuta un harness sintético de larga duración que reabre `.agent/goal.json`, completa ciclos y simula una interrupción cada 17 iteraciones entre la intención y el resultado de una herramienta.
+- El harness reconcilia únicamente operaciones sintéticas; no llama a proveedores, red ni herramientas externas.
+- Por defecto dura 48 horas y registra cada minuto duración, iteraciones, recuperaciones, tamaño del estado y pico de RSS en Linux.
+- Ejecutar: `bash scripts/goal-soak.sh` (el script no requiere permiso de ejecución). Ajustar con `AGENT_GOAL_SOAK_SECONDS` y `AGENT_GOAL_SOAK_INTERVAL_MS`.
+- El test es ignorado por CI de forma deliberada. Una ejecución corta valida el harness, pero **no** satisface el criterio de soak de varios días. Registrar duración y resultado real antes de cerrar la issue.
+
+El diario causal conserva hasta 200 fallos con fingerprint, categoría, síntoma y estrategia
+  probada. `goal_failure` bloquea repetir el mismo fingerprint+estrategia salvo que el agente
+  declare y describa un cambio de condiciones; los últimos fallos se inyectan en los ciclos
+  siguientes para reducir bucles de ensayo idéntico.
+- **Límite pendiente:** el evaluador solo ejecuta checks de la lista permitida; todavía no valida
+  de forma general objetivos no ejecutables ni interpreta criterios arbitrarios.
 
 ### Agenda de tareas
 - `schedule_add` / `schedule_list` / `schedule_remove` y `--every 30m --task "..."`.

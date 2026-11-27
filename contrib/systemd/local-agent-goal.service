@@ -1,0 +1,30 @@
+[Unit]
+Description=Local Agent persistent goal worker
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/local-agent --daemon --workspace %h/agent-workspace
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGINT
+UMask=0077
+
+# Reduce host exposure while keeping the workspace and Rust caches writable.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/agent-workspace %h/.cargo %h/.cache
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=default.target

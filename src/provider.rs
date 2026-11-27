@@ -22,8 +22,15 @@ pub struct ToolCall {
 pub enum Msg {
     System(String),
     User(String),
-    Assistant { text: String, calls: Vec<ToolCall> },
-    Tool { id: String, name: String, content: String },
+    Assistant {
+        text: String,
+        calls: Vec<ToolCall>,
+    },
+    Tool {
+        id: String,
+        name: String,
+        content: String,
+    },
 }
 
 /// Respuesta de un turno del modelo.

@@ -36,9 +36,7 @@ fn valid_name(name: &str) -> bool {
             .next()
             .map(|c| c.is_ascii_alphabetic() || c == '_')
             .unwrap_or(false)
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn default_schema() -> Value {
@@ -247,7 +245,9 @@ impl Tool for ToolListTool {
     fn run(&self, _args: &Value) -> Result<String> {
         let tools = load_python_tools(self.ws.root());
         if tools.is_empty() {
-            return Ok("No hay herramientas propias todavía (puedes crear con tool_create).".into());
+            return Ok(
+                "No hay herramientas propias todavía (puedes crear con tool_create).".into(),
+            );
         }
         let mut out = String::new();
         for tool in tools {
@@ -278,7 +278,10 @@ impl Tool for ToolRemoveTool {
         }
         let dir = tools_dir(self.ws.root());
         let mut removed = false;
-        for path in [dir.join(format!("{name}.py")), dir.join(format!("{name}.json"))] {
+        for path in [
+            dir.join(format!("{name}.py")),
+            dir.join(format!("{name}.json")),
+        ] {
             if path.exists() {
                 std::fs::remove_file(&path)?;
                 removed = true;
@@ -770,7 +773,8 @@ mod tests {
         }
         let ws = crate::workspace_for_tests("ext-tool");
         let create = ToolCreateTool { ws: ws.clone() };
-        let code = "import json,sys\nargs=json.load(sys.stdin)\nprint(args.get('a',0)+args.get('b',0))";
+        let code =
+            "import json,sys\nargs=json.load(sys.stdin)\nprint(args.get('a',0)+args.get('b',0))";
         create
             .run(&json!({
                 "name": "sumar",

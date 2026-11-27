@@ -3,6 +3,7 @@
 
 mod agent;
 mod browser;
+mod daemon_lock;
 mod ext;
 mod goals;
 mod hardware;
@@ -27,10 +28,11 @@ use anyhow::{Context, Result, bail};
 
 use crate::agent::{Agent, AgentOptions};
 use crate::browser::Browser;
+use crate::daemon_lock::DaemonLock;
 use crate::goals::GoalState;
 use crate::hardware::Specs;
 use crate::memory::Memory;
-use crate::models::{Downloads, Role, MAX_DOWNLOADS};
+use crate::models::{Downloads, MAX_DOWNLOADS, Role};
 use crate::orchestra::{Limits, Orchestra};
 use crate::provider::{Backend, Embedder, Kind};
 use crate::scheduler::Scheduler;
@@ -42,8 +44,9 @@ local-agent · agente LLM local (Ollama / llama.cpp) con RAG, web, memoria y sub
 
 USO
   local-agent [opciones] [petición...]
-  local-agent --goal \"objetivo\"        persigue la meta hasta cumplirla
-  local-agent --daemon                 ejecuta la agenda de tareas periódicas
+  local-agent --goal \"objetivo\"        ejecuta un lote y persiste el progreso
+  local-agent --goal \"objetivo\" --daemon trabaja por lotes hasta completar
+  local-agent --daemon                 reanuda el objetivo activo y la agenda periódica
   local-agent --telegram               atiende Telegram (TELEGRAM_BOT_TOKEN)
   local-agent --voice                  conversación por micrófono y voz
   local-agent --info                   hardware, modelos y estado
@@ -67,8 +70,8 @@ ENTORNO
   AGENT_WEB_MIN_INTERVAL_MS, AGENT_MEMORY_MAX, TELEGRAM_BOT_TOKEN,
   AGENT_PIPER_MODEL, AGENT_WHISPER_MODEL
 
-REPL: /help · /goal <texto> · /model <nombre> · /models · /info · /memory
-      /improve · /new · /exit";
+REPL: /help · /goal <texto> · /goal-resolve <id> <applied|not-applied> <evidencia>
+      /model <nombre> · /models · /info · /memory · /improve · /new · /exit";
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -256,7 +259,7 @@ fn run() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(64 * 1024);
 
-    let goal = Arc::new(GoalState::new());
+    let goal = Arc::new(GoalState::open(goals::state_path(workspace.root()))?);
     let orchestra = Arc::new(Orchestra::new(
         backend.clone(),
         specs.clone(),
@@ -304,7 +307,13 @@ fn run() -> Result<()> {
 
     if cfg.daemon {
         let scheduler = Scheduler::open(scheduler::schedule_path(workspace.root()))?;
-        return daemon(&orchestra, scheduler, cfg.daemon_once);
+        return daemon(
+            &orchestra,
+            scheduler,
+            cfg.daemon_once,
+            cfg.goal.as_deref(),
+            cfg.goal_attempts,
+        );
     }
 
     if let (Some(every), Some(task)) = (&cfg.every, &cfg.task) {
@@ -343,6 +352,8 @@ fn run() -> Result<()> {
         return voice_loop(&mut agent);
     }
     if let Some(goal_text) = &cfg.goal {
+        let _goal_lock = DaemonLock::acquire(workspace.root())?;
+        orchestra.goal.recover_interrupted()?;
         let answer = agent.pursue(goal_text, cfg.goal_attempts)?;
         println!("\n{answer}");
         return Ok(());
@@ -357,12 +368,7 @@ fn run() -> Result<()> {
 
 fn build_agent(orchestra: &Arc<Orchestra>, model: &str) -> Agent {
     let mandate = orchestra.root_mandate();
-    let tools = Arc::new(ToolRegistry::for_role(
-        orchestra,
-        0,
-        Role::Worker,
-        mandate,
-    ));
+    let tools = Arc::new(ToolRegistry::for_role(orchestra, 0, Role::Worker, mandate));
     Agent::new(
         orchestra.backend.provider(model),
         tools,
@@ -382,6 +388,65 @@ fn build_agent(orchestra: &Arc<Orchestra>, model: &str) -> Agent {
 fn info_block(orchestra: &Arc<Orchestra>) -> String {
     let mut out = String::new();
     out.push_str(&format!("Hardware: {}\n", orchestra.specs.summary()));
+    if let Some(goal) = orchestra.goal.active() {
+        out.push_str(&format!(
+            "Objetivo: {} · {} · {} ciclos registrados\n",
+            goal.id,
+            match goal.status {
+                goals::GoalStatus::Active => "activo",
+                goals::GoalStatus::Paused => "pausado por estancamiento",
+                goals::GoalStatus::Completed => "completado",
+            },
+            goal.attempt_count
+        ));
+        out.push_str(&format!("  {}\n", memory::truncate(&goal.goal, 180)));
+        if let Some(reason) = &goal.pause_reason {
+            out.push_str(&format!(
+                "  Motivo de pausa: {}\n",
+                memory::truncate(reason, 160)
+            ));
+        }
+        let pending = goal
+            .tasks
+            .iter()
+            .filter(|task| task.status == goals::TaskStatus::Pending)
+            .count();
+        let in_progress = goal
+            .tasks
+            .iter()
+            .filter(|task| task.status == goals::TaskStatus::InProgress)
+            .count();
+        let completed = goal
+            .tasks
+            .iter()
+            .filter(|task| task.status == goals::TaskStatus::Completed)
+            .count();
+        let verified = goal.tasks.iter().filter(|task| task.verified).count();
+        let unknown_ops = goal
+            .operations
+            .iter()
+            .filter(|op| op.status == goals::OperationStatus::Unknown)
+            .count();
+        let started_ops = goal
+            .operations
+            .iter()
+            .filter(|op| op.status == goals::OperationStatus::Started)
+            .count();
+        out.push_str(&format!(
+            "  Plan: {} tareas · {} pendientes · {} en curso · {} completadas · {} verificadas\n",
+            goal.tasks.len(),
+            pending,
+            in_progress,
+            completed,
+            verified
+        ));
+        out.push_str(&format!(
+            "  Journal: {} operaciones · {} resultado desconocido · {} en ejecución\n",
+            goal.operations.len(),
+            unknown_ops,
+            started_ops
+        ));
+    }
     out.push_str(&format!(
         "Backend: {} · {}\n",
         orchestra.backend.label(),
@@ -389,14 +454,22 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
     ));
     out.push_str("Modelos instalados:\n");
     for model in &orchestra.models {
-        let kind = if model.is_embedding() { "embeddings" } else { "chat" };
+        let kind = if model.is_embedding() {
+            "embeddings"
+        } else {
+            "chat"
+        };
         out.push_str(&format!(
             "  - {} ({:.1}B, {:.2} GB, {kind})\n",
             model.id, model.params_b, model.size_gb
         ));
     }
     for role in [Role::Planner, Role::Worker, Role::Coder, Role::Fast] {
-        out.push_str(&format!("  {} → {}\n", role.as_str(), orchestra.model_for(role)));
+        out.push_str(&format!(
+            "  {} → {}\n",
+            role.as_str(),
+            orchestra.model_for(role)
+        ));
     }
     let modelo_worker = orchestra.model_for(Role::Worker);
     out.push_str(&format!(
@@ -443,15 +516,74 @@ fn info_block(orchestra: &Arc<Orchestra>) -> String {
     out
 }
 
-fn daemon(orchestra: &Arc<Orchestra>, mut scheduler: Scheduler, once: bool) -> Result<()> {
+fn daemon(
+    orchestra: &Arc<Orchestra>,
+    mut scheduler: Scheduler,
+    once: bool,
+    initial_goal: Option<&str>,
+    goal_attempts: usize,
+) -> Result<()> {
+    // Impide que dos procesos compitan por el mismo objetivo persistente.
+    let _daemon_lock = DaemonLock::acquire(orchestra.workspace.root())?;
+    orchestra.goal.recover_interrupted()?;
+    if let Some(goal) = initial_goal {
+        orchestra.goal.start(goal)?;
+    }
+    let worker_model = orchestra.model_for(Role::Worker);
+    let has_active_goal = initial_goal.is_some() || orchestra.goal.active().is_some();
+    if has_active_goal && worker_model.is_empty() {
+        bail!(
+            "no hay un modelo de chat instalado en {}; no se inicia el worker persistente",
+            orchestra.backend.label()
+        );
+    }
+    let mut goal_agent = if has_active_goal {
+        Some(build_agent(orchestra, &worker_model))
+    } else {
+        None
+    };
     println!(
-        "daemon · agenda {} · {} tarea(s) · {} subagente(s) en paralelo",
+        "daemon · agenda {} · {} tarea(s) · objetivo persistente: {} · {} subagente(s) en paralelo",
         scheduler.path().display(),
         scheduler.tasks().len(),
+        if goal_agent.is_some() {
+            "activo/reanudable"
+        } else {
+            "sin objetivo activo"
+        },
         orchestra.parallel
     );
     loop {
         let now = scheduler::now();
+
+        // Si hay una misión raíz activa, el worker la continúa en lotes acotados.
+        // Cada lote persiste sus ciclos; al reiniciar el daemon se reanuda desde disco.
+        if let Some(active) = orchestra.goal.active()
+            && active.status == goals::GoalStatus::Active
+        {
+            let agent = goal_agent.get_or_insert_with(|| build_agent(orchestra, &worker_model));
+            let started = Instant::now();
+            let result = agent.pursue(&active.goal, goal_attempts);
+            let body = match result {
+                Ok(text) => format!(
+                    "OBJETIVO · {:.1}s\n{text}\n",
+                    started.elapsed().as_secs_f64()
+                ),
+                Err(err) => format!(
+                    "OBJETIVO ERROR · {:.1}s\n{err:#}\n",
+                    started.elapsed().as_secs_f64()
+                ),
+            };
+            let dir = scheduler::runs_dir(orchestra.workspace.root());
+            std::fs::create_dir_all(&dir)?;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("goal.log"))?;
+            writeln!(file, "--- {} ---\n{body}", scheduler::now())?;
+            println!("{body}");
+        }
+
         for task in scheduler.due(now) {
             println!(
                 "▶ {} · {} · cada {}",
@@ -565,8 +697,43 @@ fn repl(
             continue;
         }
         if let Some(goal) = line.strip_prefix("/goal ") {
-            match agent.pursue(goal.trim(), goal_attempts) {
-                Ok(answer) => println!("\n{answer}\n"),
+            match DaemonLock::acquire(orchestra.workspace.root()) {
+                Ok(_goal_lock) => {
+                    if let Err(err) = orchestra.goal.recover_interrupted() {
+                        eprintln!("error: {err:#}");
+                        continue;
+                    }
+                    match agent.pursue(goal.trim(), goal_attempts) {
+                        Ok(answer) => println!("\n{answer}\n"),
+                        Err(err) => eprintln!("error: {err:#}"),
+                    }
+                }
+                Err(err) => eprintln!("error: {err:#}"),
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("/goal-resolve ") {
+            let mut parts = rest.splitn(3, ' ');
+            let id = parts.next().unwrap_or("").trim();
+            let outcome = parts.next().unwrap_or("").trim();
+            let evidence = parts.next().unwrap_or("").trim();
+            if id.is_empty() || evidence.is_empty() || !matches!(outcome, "applied" | "not-applied")
+            {
+                eprintln!("uso: /goal-resolve <id> <applied|not-applied> <evidencia>");
+                continue;
+            }
+            match DaemonLock::acquire(orchestra.workspace.root()) {
+                Ok(_goal_lock) => {
+                    let result = orchestra.goal.recover_interrupted().and_then(|_| {
+                        orchestra
+                            .goal
+                            .resolve_operation(id, outcome == "applied", evidence)
+                    });
+                    match result {
+                        Ok(()) => println!("operación {id} reconciliada: {outcome}"),
+                        Err(err) => eprintln!("error: {err:#}"),
+                    }
+                }
                 Err(err) => eprintln!("error: {err:#}"),
             }
             continue;
@@ -593,7 +760,11 @@ fn repl(
             "/info" => println!("{}", info_block(orchestra)),
             "/models" | "/modelos" => {
                 for m in &orchestra.models {
-                    let kind = if m.is_embedding() { "embeddings" } else { "chat" };
+                    let kind = if m.is_embedding() {
+                        "embeddings"
+                    } else {
+                        "chat"
+                    };
                     println!("  {} ({:.1}B, {kind})", m.id, m.params_b);
                 }
             }

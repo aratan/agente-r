@@ -70,7 +70,10 @@ impl Memory {
                     // No se pierde nada: el fichero corrupto se aparta.
                     let backup = path.with_extension(format!("json.corrupto-{}", ahora()));
                     let _ = std::fs::rename(&path, &backup);
-                    eprintln!("aviso: memoria ilegible ({err}); copia en {}", backup.display());
+                    eprintln!(
+                        "aviso: memoria ilegible ({err}); copia en {}",
+                        backup.display()
+                    );
                     Disk::default()
                 }
             },
@@ -343,7 +346,6 @@ impl Memory {
         Ok(updated)
     }
 
-
     pub fn text_of(&self, id: &str) -> Option<String> {
         self.disk
             .entries
@@ -462,10 +464,24 @@ mod tests {
     #[test]
     fn guarda_recupera_y_deduplica() {
         let (mut mem, path) = tmp_memory();
-        mem.remember("lesson", "Los tests CDP necesitan Chrome headless", vec![], "test", None, vec![])
-            .unwrap();
+        mem.remember(
+            "lesson",
+            "Los tests CDP necesitan Chrome headless",
+            vec![],
+            "test",
+            None,
+            vec![],
+        )
+        .unwrap();
         let again = mem
-            .remember("lesson", "Los tests CDP necesitan Chrome headless", vec![], "test", None, vec![])
+            .remember(
+                "lesson",
+                "Los tests CDP necesitan Chrome headless",
+                vec![],
+                "test",
+                None,
+                vec![],
+            )
             .unwrap();
         assert!(again.starts_with("ya existía"), "{again}");
         assert_eq!(mem.len(), 1);
@@ -482,8 +498,15 @@ mod tests {
     #[test]
     fn acentos_y_tags_se_recuperan() {
         let (mut mem, _) = tmp_memory();
-        mem.remember("fact", "La canción del despliegue es opcional", vec!["musica".into()], "x", None, vec![])
-            .unwrap();
+        mem.remember(
+            "fact",
+            "La canción del despliegue es opcional",
+            vec!["musica".into()],
+            "x",
+            None,
+            vec![],
+        )
+        .unwrap();
         assert_eq!(mem.search("cancion", None, 5, None).len(), 1);
         assert_eq!(mem.search("musica", None, 5, None).len(), 1);
     }
@@ -491,11 +514,25 @@ mod tests {
     #[test]
     fn versiona_al_reemplazar() {
         let (mut mem, _) = tmp_memory();
-        mem.remember("skill", "v1: usar curl para buscar", vec![], "x", None, vec![])
-            .unwrap();
+        mem.remember(
+            "skill",
+            "v1: usar curl para buscar",
+            vec![],
+            "x",
+            None,
+            vec![],
+        )
+        .unwrap();
         let old_id = mem.list(None, 1)[0].id.clone();
-        mem.remember("skill", "v2: usar web_search", vec![], "x", Some(&old_id), vec![])
-            .unwrap();
+        mem.remember(
+            "skill",
+            "v2: usar web_search",
+            vec![],
+            "x",
+            Some(&old_id),
+            vec![],
+        )
+        .unwrap();
         assert_eq!(mem.len(), 1);
         assert_eq!(mem.list(None, 1)[0].version, 2);
         assert_eq!(mem.superseded_count(), 1);
@@ -523,8 +560,15 @@ mod tests {
     fn vectores_en_lote_guardan_una_vez() {
         let (mut mem, path) = tmp_memory();
         for i in 0..3 {
-            mem.remember("fact", &format!("dato número {i}"), vec![], "x", None, vec![])
-                .unwrap();
+            mem.remember(
+                "fact",
+                &format!("dato número {i}"),
+                vec![],
+                "x",
+                None,
+                vec![],
+            )
+            .unwrap();
         }
         let ids: Vec<String> = mem.list(None, 10).iter().map(|e| e.id.clone()).collect();
         let lote: Vec<(String, Vec<f32>)> = ids
@@ -582,7 +626,11 @@ mod tests {
                 )
                 .unwrap();
             }
-            let ids: Vec<String> = mem.list(None, ENTRADAS).iter().map(|e| e.id.clone()).collect();
+            let ids: Vec<String> = mem
+                .list(None, ENTRADAS)
+                .iter()
+                .map(|e| e.id.clone())
+                .collect();
             let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             (mem, path, ids, bytes)
         };
@@ -621,8 +669,14 @@ mod tests {
             bytes as f64 / 1e6,
             final_antes as f64 / 1e6
         );
-        eprintln!("  set_vector en bucle : {:?}  ({} escrituras del fichero)", antes, ENTRADAS);
-        eprintln!("  set_vector_many     : {:?}  (1 escritura del fichero)", despues);
+        eprintln!(
+            "  set_vector en bucle : {:?}  ({} escrituras del fichero)",
+            antes, ENTRADAS
+        );
+        eprintln!(
+            "  set_vector_many     : {:?}  (1 escritura del fichero)",
+            despues
+        );
         eprintln!(
             "  factor              : {:.1}×",
             antes.as_secs_f64() / despues.as_secs_f64().max(1e-9)
@@ -632,6 +686,9 @@ mod tests {
     #[test]
     fn tipo_invalido_falla() {
         let (mut mem, _) = tmp_memory();
-        assert!(mem.remember("chorrada", "x", vec![], "s", None, vec![]).is_err());
+        assert!(
+            mem.remember("chorrada", "x", vec![], "s", None, vec![])
+                .is_err()
+        );
     }
 }
