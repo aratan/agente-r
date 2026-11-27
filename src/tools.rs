@@ -1533,8 +1533,7 @@ impl Tool for GoalPlanTool {
                         items.iter().map(|item| item.as_str().map(str::to_string)
                             .ok_or_else(|| anyhow!("cada dependencia debe ser un string")))
                             .collect::<Result<Vec<_>>>()
-                    }).transpose()?.unwrap_or_default()
-                    .unwrap_or_default();
+                    }).transpose()?.unwrap_or_default();
                 if args.get("depends_on").is_some_and(|v| !v.is_array()) {
                     bail!("depends_on debe ser un array de strings");
                 }
@@ -1557,11 +1556,12 @@ impl Tool for GoalPlanTool {
                 if tasks.is_empty() { return Ok("El plan todavía no contiene tareas.".into()); }
                 let mut out = String::new();
                 for task in tasks {
-                    out.push_str(&format!("- {} [{:?}] {} · depende de: {} · evidencia: {}\\n",
+                    out.push_str(&format!("- {} [{:?}] {} · depende de: {} · evidencia: {}",
                         task.id, task.status, task.title,
                         if task.depends_on.is_empty() { "ninguna".to_string() } else { task.depends_on.join(", ") },
                         task.evidence.unwrap_or_else(|| "pendiente".into())
                     ));
+                    out.push('\\n');
                 }
                 Ok(out)
             }
