@@ -1561,7 +1561,7 @@ impl Tool for GoalPlanTool {
                         if task.depends_on.is_empty() { "ninguna".to_string() } else { task.depends_on.join(", ") },
                         task.evidence.unwrap_or_else(|| "pendiente".into())
                     ));
-                    out.push('\\n');
+                    out.push('\n');
                 }
                 Ok(out)
             }
