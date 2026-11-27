@@ -1566,7 +1566,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("goal.json");
 
-        for index in 0..240u64 {
+        for index in 0..1_200u64 {
             let goal = GoalState::open(path.clone()).unwrap();
             goal.recover_interrupted().unwrap();
             goal.start("soak persistente").unwrap();
@@ -1576,9 +1576,9 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-            // Cada 20 ciclos simulamos una caída tras registrar la intención,
+            // Cada 100 ciclos simulamos una caída tras registrar la intención,
             // antes de guardar el resultado de la operación.
-            if index % 20 == 0 {
+            if index % 100 == 0 {
                 drop(goal);
                 continue;
             }
@@ -1591,11 +1591,11 @@ mod tests {
         let recovered = GoalState::open(path.clone()).unwrap();
         recovered.recover_interrupted().unwrap();
         let record = recovered.active().unwrap();
-        assert_eq!(record.attempt_count, 228);
+        assert_eq!(record.attempt_count, 1_188);
         assert!(record.attempts.len() <= 500);
         assert!(record.cycles.len() <= 200);
         assert!(record.operations.len() <= 1_000);
-        assert_eq!(record.operation_sequence, 240);
+        assert_eq!(record.operation_sequence, 1_200);
         assert_eq!(
             record
                 .operations
@@ -1606,7 +1606,7 @@ mod tests {
         );
         let bytes = std::fs::metadata(&path).unwrap().len();
         assert!(
-            bytes < 512 * 1024,
+            bytes < 2 * 1024 * 1024,
             "goal.json creció demasiado: {bytes} bytes"
         );
         let _ = std::fs::remove_dir_all(dir);
