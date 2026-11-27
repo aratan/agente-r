@@ -1821,7 +1821,7 @@ mod tests {
     }
 
     /// Ensayo prolongado manual. No se ejecuta en CI: por defecto dura 48 horas.
-    /// Ejecutar con scripts/goal-soak.sh; solo usa operaciones sintéticas locales.
+    /// Ejecutar con bash scripts/goal-soak.sh; solo usa operaciones sintéticas locales.
     #[test]
     #[ignore = "soak prolongado manual; ejecutar con scripts/goal-soak.sh"]
     fn soak_durable_goal_state_for_configured_duration() {
@@ -1932,5 +1932,4 @@ mod tests {
             path.display()
         );
     }
-
 }
